@@ -120,7 +120,7 @@ Add to your Cursor MCP configuration (`.cursor/mcp.json` in your project or `~/.
       "command": "go",
       "args": ["run", "github.com/tejzpr/webex-go-mcp@latest"],
       "env": {
-        "WEBEX_ACCESS_TOKEN": "your-token-here"
+        "WEBEX_ACCESS_TOKEN": "<WEBEX_ACCESS_TOKEN>"
       }
     }
   }

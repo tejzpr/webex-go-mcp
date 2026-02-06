@@ -57,7 +57,7 @@ func RegisterMessageTools(s *server.MCPServer, client *webex.WebexClient) {
 	// webex_messages_create
 	s.AddTool(
 		mcp.NewTool("webex_messages_create",
-			mcp.WithDescription("Send a message to a Webex room/space or person. Provide roomId, or toPersonId, or toPersonEmail."),
+			mcp.WithDescription("Send a message to a Webex room/space or person. Provide roomId, or toPersonId, or toPersonEmail. Always confirm with the user before sending a message, unless the user has explicitly requested to not confirm."),
 			mcp.WithString("roomId", mcp.Description("The room ID to send the message to")),
 			mcp.WithString("toPersonId", mcp.Description("The person ID to send a 1:1 message to")),
 			mcp.WithString("toPersonEmail", mcp.Description("The email to send a 1:1 message to")),
@@ -115,7 +115,7 @@ func RegisterMessageTools(s *server.MCPServer, client *webex.WebexClient) {
 	// webex_messages_delete
 	s.AddTool(
 		mcp.NewTool("webex_messages_delete",
-			mcp.WithDescription("Delete a Webex message by its ID."),
+			mcp.WithDescription("Delete a Webex message by its ID. Always confirm with the user before deleting a message, unless the user has explicitly requested to not confirm."),
 			mcp.WithString("messageId", mcp.Required(), mcp.Description("The ID of the message to delete")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
