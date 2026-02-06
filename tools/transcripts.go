@@ -6,13 +6,12 @@ import (
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
 	webex "github.com/tejzpr/webex-go-sdk/v2"
 	"github.com/tejzpr/webex-go-sdk/v2/transcripts"
 )
 
 // RegisterTranscriptTools registers all transcript-related MCP tools.
-func RegisterTranscriptTools(s *server.MCPServer, client *webex.WebexClient) {
+func RegisterTranscriptTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_transcripts_list
 	s.AddTool(
 		mcp.NewTool("webex_transcripts_list",

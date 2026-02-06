@@ -36,6 +36,44 @@ Configuration is loaded via environment variables and/or CLI flags. CLI flags ta
 | `WEBEX_ACCESS_TOKEN` | `--access-token` | Yes | - | Webex API bearer token |
 | `WEBEX_BASE_URL` | `--base-url` | No | `https://webexapis.com/v1` | Webex API base URL |
 | `WEBEX_TIMEOUT` | `--timeout` | No | `30s` | HTTP request timeout |
+| `WEBEX_INCLUDE_TOOLS` | `--include` | No | - | Comma-separated list of tools to include (only these are registered) |
+| `WEBEX_EXCLUDE_TOOLS` | `--exclude` | No | - | Comma-separated list of tools to exclude (all others are registered) |
+
+### Tool Filtering
+
+You can control which tools are exposed using `--include` or `--exclude`. Tools are specified in `category:action` format, where `category` maps to the Webex API resource (e.g. `messages`, `rooms`, `meetings`) and `action` is the operation (e.g. `list`, `create`, `get`, `delete`).
+
+Both singular and plural category forms are accepted (`message:list` and `messages:list` both work).
+
+The `category:action` shorthand maps to the full tool name `webex_{category}_{action}`. For example, `messages:list` maps to `webex_messages_list`.
+
+**Rules:**
+- If `--include` is set, only the specified tools are registered.
+- If `--exclude` is set, all tools except the specified ones are registered.
+- If both are set, `--include` takes priority and `--exclude` is ignored.
+- If neither is set, all 31 tools are registered (default).
+
+**Available categories and actions:**
+
+| Category | Actions |
+|---|---|
+| `messages` | `list`, `create`, `get`, `delete` |
+| `rooms` | `list`, `create`, `get`, `update`, `delete` |
+| `teams` | `list`, `create`, `get`, `update` |
+| `memberships` | `list`, `create`, `update`, `delete` |
+| `meetings` | `list`, `create`, `get`, `update`, `delete` |
+| `transcripts` | `list`, `download`, `list_snippets`, `get_snippet` |
+| `webhooks` | `list`, `create`, `get`, `update`, `delete` |
+
+**Examples:**
+
+```bash
+# Only register read-only transcript tools
+./webex-go-mcp --include "transcripts:list,transcripts:download,transcripts:list_snippets,transcripts:get_snippet"
+
+# Register all tools except destructive ones
+./webex-go-mcp --exclude "messages:delete,rooms:delete,meetings:delete,memberships:delete,webhooks:delete"
+```
 
 ## Usage
 
@@ -127,6 +165,22 @@ Add to your Cursor MCP configuration (`.cursor/mcp.json` in your project or `~/.
 }
 ```
 
+**With tool filtering (only expose specific tools):**
+
+```json
+{
+  "mcpServers": {
+    "webex": {
+      "command": "go",
+      "args": ["run", "github.com/tejzpr/webex-go-mcp@latest", "--include", "messages:list,messages:get,transcripts:list,transcripts:download"],
+      "env": {
+        "WEBEX_ACCESS_TOKEN": "<WEBEX_ACCESS_TOKEN>"
+      }
+    }
+  }
+}
+```
+
 > **Note:** The `go run` approach requires Go to be installed and available on your `PATH`. The first run will download and compile the module (cached for subsequent runs). To update to the latest version, Go will re-fetch when `@latest` resolves to a newer release.
 
 ## Tool Reference
@@ -190,6 +244,7 @@ webex-go-mcp/
   main.go       -- Cobra CLI + Viper config, creates Webex SDK client
   server.go     -- MCP server setup, registers all tools, STDIO transport
   tools/
+    filter.go         -- ToolRegistrar interface, tool include/exclude filtering
     messages.go       -- 4 message tools
     rooms.go          -- 5 room tools
     teams.go          -- 4 team tools

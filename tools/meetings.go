@@ -6,13 +6,12 @@ import (
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
 	webex "github.com/tejzpr/webex-go-sdk/v2"
 	"github.com/tejzpr/webex-go-sdk/v2/meetings"
 )
 
 // RegisterMeetingTools registers all meeting-related MCP tools.
-func RegisterMeetingTools(s *server.MCPServer, client *webex.WebexClient) {
+func RegisterMeetingTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_meetings_list
 	s.AddTool(
 		mcp.NewTool("webex_meetings_list",

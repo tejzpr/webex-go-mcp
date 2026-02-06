@@ -6,13 +6,12 @@ import (
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
 	webex "github.com/tejzpr/webex-go-sdk/v2"
 	"github.com/tejzpr/webex-go-sdk/v2/memberships"
 )
 
 // RegisterMembershipTools registers all membership-related MCP tools.
-func RegisterMembershipTools(s *server.MCPServer, client *webex.WebexClient) {
+func RegisterMembershipTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_memberships_list
 	s.AddTool(
 		mcp.NewTool("webex_memberships_list",

@@ -6,13 +6,12 @@ import (
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
 	webex "github.com/tejzpr/webex-go-sdk/v2"
 	"github.com/tejzpr/webex-go-sdk/v2/teams"
 )
 
 // RegisterTeamTools registers all team-related MCP tools.
-func RegisterTeamTools(s *server.MCPServer, client *webex.WebexClient) {
+func RegisterTeamTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_teams_list
 	s.AddTool(
 		mcp.NewTool("webex_teams_list",

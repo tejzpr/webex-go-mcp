@@ -6,13 +6,12 @@ import (
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
 	webex "github.com/tejzpr/webex-go-sdk/v2"
 	"github.com/tejzpr/webex-go-sdk/v2/rooms"
 )
 
 // RegisterRoomTools registers all room/space-related MCP tools.
-func RegisterRoomTools(s *server.MCPServer, client *webex.WebexClient) {
+func RegisterRoomTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_rooms_list
 	s.AddTool(
 		mcp.NewTool("webex_rooms_list",

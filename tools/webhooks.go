@@ -6,13 +6,12 @@ import (
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
 	webex "github.com/tejzpr/webex-go-sdk/v2"
 	"github.com/tejzpr/webex-go-sdk/v2/webhooks"
 )
 
 // RegisterWebhookTools registers all webhook-related MCP tools.
-func RegisterWebhookTools(s *server.MCPServer, client *webex.WebexClient) {
+func RegisterWebhookTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_webhooks_list
 	s.AddTool(
 		mcp.NewTool("webex_webhooks_list",

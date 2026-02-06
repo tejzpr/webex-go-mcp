@@ -29,17 +29,23 @@ func main() {
 	rootCmd.Flags().String("access-token", "", "Webex API access token (env: WEBEX_ACCESS_TOKEN)")
 	rootCmd.Flags().String("base-url", "https://webexapis.com/v1", "Webex API base URL (env: WEBEX_BASE_URL)")
 	rootCmd.Flags().Duration("timeout", 30*time.Second, "HTTP request timeout (env: WEBEX_TIMEOUT)")
+	rootCmd.Flags().String("include", "", "Comma-separated list of tools to include (category:action format, e.g. messages:list,meetings:create). Only these tools will be registered. (env: WEBEX_INCLUDE_TOOLS)")
+	rootCmd.Flags().String("exclude", "", "Comma-separated list of tools to exclude (category:action format, e.g. messages:delete,rooms:delete). All tools except these will be registered. (env: WEBEX_EXCLUDE_TOOLS)")
 
 	// Bind flags to viper
 	_ = viper.BindPFlag("access_token", rootCmd.Flags().Lookup("access-token"))
 	_ = viper.BindPFlag("base_url", rootCmd.Flags().Lookup("base-url"))
 	_ = viper.BindPFlag("timeout", rootCmd.Flags().Lookup("timeout"))
+	_ = viper.BindPFlag("include_tools", rootCmd.Flags().Lookup("include"))
+	_ = viper.BindPFlag("exclude_tools", rootCmd.Flags().Lookup("exclude"))
 
 	// Bind environment variables
 	viper.SetEnvPrefix("WEBEX")
 	_ = viper.BindEnv("access_token", "WEBEX_ACCESS_TOKEN")
 	_ = viper.BindEnv("base_url", "WEBEX_BASE_URL")
 	_ = viper.BindEnv("timeout", "WEBEX_TIMEOUT")
+	_ = viper.BindEnv("include_tools", "WEBEX_INCLUDE_TOOLS")
+	_ = viper.BindEnv("exclude_tools", "WEBEX_EXCLUDE_TOOLS")
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -70,6 +76,10 @@ func run(cmd *cobra.Command, args []string) error {
 	log.SetOutput(os.Stderr)
 	log.Printf("Starting Webex MCP Server v%s (base_url=%s, timeout=%s)", version, baseURL, timeout)
 
+	// Tool filtering
+	includeTools := viper.GetString("include_tools")
+	excludeTools := viper.GetString("exclude_tools")
+
 	// Start the MCP server
-	return startServer(webexClient)
+	return startServer(webexClient, includeTools, excludeTools)
 }
