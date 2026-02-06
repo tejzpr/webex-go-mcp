@@ -17,11 +17,27 @@ func RegisterRoomTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_rooms_list
 	s.AddTool(
 		mcp.NewTool("webex_rooms_list",
-			mcp.WithDescription("List Webex rooms/spaces the authenticated user belongs to. Response is enriched with team name, member count, and last message preview per room."),
-			mcp.WithString("teamId", mcp.Description("Filter rooms by team ID")),
-			mcp.WithString("type", mcp.Description("Filter by room type: 'direct' (1:1) or 'group'")),
-			mcp.WithString("sortBy", mcp.Description("Sort by: 'id', 'lastactivity', or 'created'")),
-			mcp.WithNumber("max", mcp.Description("Maximum number of rooms to return")),
+			mcp.WithDescription("List Webex rooms/spaces the authenticated user belongs to. In Webex, a 'room' can be either a group space or a 1:1 direct conversation.\n"+
+				"\n"+
+				"ROOM TYPES:\n"+
+				"- 'direct': A 1:1 conversation with another person. The room title is the other person's display name. Every pair of people has exactly one 1:1 room.\n"+
+				"- 'group': A named space with multiple members (like a channel or project room).\n"+
+				"\n"+
+				"COMMON TASKS:\n"+
+				"- Find a 1:1 chat with someone: Use type='direct' and sortBy='lastactivity' to list 1:1 rooms. Find the one whose title matches the person's name.\n"+
+				"- Find a group space by name: Use type='group' and sortBy='lastactivity'. The room title is the space name.\n"+
+				"- Find recently active conversations: Use sortBy='lastactivity' (no type filter) to get the most recent rooms of any type.\n"+
+				"- List rooms in a team: Use teamId to filter by team.\n"+
+				"\n"+
+				"TIPS:\n"+
+				"- You do NOT need to find a room to DM someone. Use webex_messages_create with 'toPersonEmail' directly -- it's much simpler.\n"+
+				"- You only need a roomId when you want to read messages from a conversation (webex_messages_list requires it).\n"+
+				"\n"+
+				"RESPONSE: Enriched with team name, member count, and last message preview per room."),
+			mcp.WithString("teamId", mcp.Description("Filter to only rooms that belong to this team. Get a teamId from webex_teams_list.")),
+			mcp.WithString("type", mcp.Description("Filter by room type. 'direct' = 1:1 conversations (room title is the other person's name). 'group' = named multi-person spaces. Omit to get both types.")),
+			mcp.WithString("sortBy", mcp.Description("Sort order: 'lastactivity' (most recently active first -- RECOMMENDED for finding recent conversations), 'created' (newest first), or 'id' (default, by room ID).")),
+			mcp.WithNumber("max", mcp.Description("Maximum number of rooms to return. Use a small number (10-20) when searching for a specific room, larger when listing all rooms.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			opts := &rooms.ListOptions{}
@@ -95,9 +111,13 @@ func RegisterRoomTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_rooms_create
 	s.AddTool(
 		mcp.NewTool("webex_rooms_create",
-			mcp.WithDescription("Create a new Webex room/space."),
-			mcp.WithString("title", mcp.Required(), mcp.Description("Title of the room")),
-			mcp.WithString("teamId", mcp.Description("Team ID to associate the room with")),
+			mcp.WithDescription("Create a new Webex group room/space. This creates a multi-person space that others can be added to.\n"+
+				"\n"+
+				"NOTE: You do NOT need to create a room to send a 1:1 message. Use webex_messages_create with 'toPersonEmail' instead -- Webex auto-creates the 1:1 room.\n"+
+				"\n"+
+				"After creating a group room, use webex_memberships_create to add people to it."),
+			mcp.WithString("title", mcp.Required(), mcp.Description("The name/title for the new room. Choose something descriptive (e.g. 'Project Alpha Discussion', 'Q1 Planning').")),
+			mcp.WithString("teamId", mcp.Description("Optional team ID to associate this room with. The room will appear under that team. Get a teamId from webex_teams_list.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			title, err := req.RequireString("title")
@@ -123,8 +143,18 @@ func RegisterRoomTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_rooms_get
 	s.AddTool(
 		mcp.NewTool("webex_rooms_get",
-			mcp.WithDescription("Get details of a specific Webex room/space by its ID. Response is enriched with team info, creator name, full member list, and recent messages with sender names."),
-			mcp.WithString("roomId", mcp.Required(), mcp.Description("The ID of the room to retrieve")),
+			mcp.WithDescription("Get full details of a specific Webex room/space by its ID. Use this when you have a roomId and need comprehensive info about the room.\n"+
+				"\n"+
+				"RESPONSE: Heavily enriched with:\n"+
+				"- room: Full room details (title, type, created date, lastActivity, etc.).\n"+
+				"- team: Team name and ID if the room belongs to a team.\n"+
+				"- creator: Display name of who created the room.\n"+
+				"- members: Full list of everyone in the room with their display names, emails, and moderator status.\n"+
+				"- memberCount: Total number of members.\n"+
+				"- recentMessages: The 5 most recent messages with sender names -- gives a snapshot of the current conversation.\n"+
+				"\n"+
+				"This is the best tool to use when the user asks 'who is in this room?' or 'what's happening in this space?' -- one call gets everything."),
+			mcp.WithString("roomId", mcp.Required(), mcp.Description("The ID of the room to retrieve. Get this from webex_rooms_list or from any API response that includes a roomId.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			roomID, err := req.RequireString("roomId")
@@ -201,9 +231,11 @@ func RegisterRoomTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_rooms_update
 	s.AddTool(
 		mcp.NewTool("webex_rooms_update",
-			mcp.WithDescription("Update a Webex room/space (e.g., change its title)."),
-			mcp.WithString("roomId", mcp.Required(), mcp.Description("The ID of the room to update")),
-			mcp.WithString("title", mcp.Required(), mcp.Description("New title for the room")),
+			mcp.WithDescription("Rename a Webex group room/space. Only works on group rooms -- 1:1 direct rooms cannot be renamed (their title is always the other person's name).\n"+
+				"\n"+
+				"IMPORTANT: Confirm with the user before renaming a room -- all members will see the name change."),
+			mcp.WithString("roomId", mcp.Required(), mcp.Description("The ID of the group room to rename. Get this from webex_rooms_list.")),
+			mcp.WithString("title", mcp.Required(), mcp.Description("The new title/name for the room.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			roomID, err := req.RequireString("roomId")
@@ -232,8 +264,10 @@ func RegisterRoomTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_rooms_delete
 	s.AddTool(
 		mcp.NewTool("webex_rooms_delete",
-			mcp.WithDescription("Delete a Webex room/space by its ID."),
-			mcp.WithString("roomId", mcp.Required(), mcp.Description("The ID of the room to delete")),
+			mcp.WithDescription("Permanently delete a Webex room/space and all its messages. This action is IRREVERSIBLE -- all messages, files, and membership history in the room will be lost.\n"+
+				"\n"+
+				"IMPORTANT: Always confirm with the user before deleting. The user must be a moderator of the room or the last person in it to delete."),
+			mcp.WithString("roomId", mcp.Required(), mcp.Description("The ID of the room to permanently delete. Get this from webex_rooms_list.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			roomID, err := req.RequireString("roomId")

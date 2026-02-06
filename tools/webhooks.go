@@ -15,8 +15,10 @@ func RegisterWebhookTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_webhooks_list
 	s.AddTool(
 		mcp.NewTool("webex_webhooks_list",
-			mcp.WithDescription("List all Webex webhooks registered by the authenticated user."),
-			mcp.WithNumber("max", mcp.Description("Maximum number of webhooks to return")),
+			mcp.WithDescription("List all Webex webhooks registered by the authenticated user. A webhook is a callback URL that Webex notifies when specific events happen (e.g. new message, meeting started, membership changed).\n"+
+				"\n"+
+				"RESPONSE: Each webhook shows its name, targetUrl, resource, event, filter, status (active/inactive), and creation date."),
+			mcp.WithNumber("max", mcp.Description("Maximum number of webhooks to return.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			opts := &webhooks.ListOptions{}
@@ -38,13 +40,25 @@ func RegisterWebhookTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_webhooks_create
 	s.AddTool(
 		mcp.NewTool("webex_webhooks_create",
-			mcp.WithDescription("Create a new Webex webhook to receive real-time notifications."),
-			mcp.WithString("name", mcp.Required(), mcp.Description("Name of the webhook")),
-			mcp.WithString("targetUrl", mcp.Required(), mcp.Description("URL to receive webhook notifications")),
-			mcp.WithString("resource", mcp.Required(), mcp.Description("Resource to watch: 'messages', 'memberships', 'rooms', 'meetings', 'recordings', 'meetingParticipants', 'meetingTranscripts', 'attachmentActions'")),
-			mcp.WithString("event", mcp.Required(), mcp.Description("Event to watch: 'created', 'updated', 'deleted', 'started', 'ended', 'joined', 'left'")),
-			mcp.WithString("filter", mcp.Description("Filter expression (e.g., 'roomId=xxx' or 'personEmail=xxx')")),
-			mcp.WithString("secret", mcp.Description("Secret used to generate webhook payload signature for verification")),
+			mcp.WithDescription("Create a new Webex webhook to receive real-time event notifications at a URL. Webex will POST a JSON payload to targetUrl whenever the specified event occurs on the specified resource.\n"+
+				"\n"+
+				"COMMON COMBINATIONS:\n"+
+				"- New messages in a room: resource='messages', event='created', filter='roomId=ROOM_ID'\n"+
+				"- New messages mentioning me: resource='messages', event='created', filter='mentionedPeople=me'\n"+
+				"- All new messages: resource='messages', event='created' (no filter)\n"+
+				"- Someone joins a room: resource='memberships', event='created', filter='roomId=ROOM_ID'\n"+
+				"- Meeting started: resource='meetings', event='started'\n"+
+				"- Meeting ended: resource='meetings', event='ended'\n"+
+				"- New recording available: resource='recordings', event='created'\n"+
+				"- New transcript available: resource='meetingTranscripts', event='created'\n"+
+				"\n"+
+				"IMPORTANT: The targetUrl must be a publicly accessible HTTPS URL that can receive POST requests."),
+			mcp.WithString("name", mcp.Required(), mcp.Description("A friendly name for this webhook (e.g. 'New messages in Project Alpha', 'Meeting notifications').")),
+			mcp.WithString("targetUrl", mcp.Required(), mcp.Description("The HTTPS URL where Webex will POST event notifications. Must be publicly accessible.")),
+			mcp.WithString("resource", mcp.Required(), mcp.Description("The Webex resource to monitor. Options: 'messages', 'memberships', 'rooms', 'meetings', 'recordings', 'meetingParticipants', 'meetingTranscripts', 'attachmentActions'.")),
+			mcp.WithString("event", mcp.Required(), mcp.Description("The event type to trigger on. Options depend on resource: 'created', 'updated', 'deleted' (for messages/memberships/rooms), 'started', 'ended' (for meetings), 'joined', 'left' (for meetingParticipants).")),
+			mcp.WithString("filter", mcp.Description("Optional filter to narrow events. Examples: 'roomId=ROOM_ID' (only events in that room), 'mentionedPeople=me' (only messages mentioning you), 'personEmail=alice@example.com' (only events involving that person).")),
+			mcp.WithString("secret", mcp.Description("Optional secret string. Webex uses it to sign the webhook payload (HMAC-SHA1 in X-Spark-Signature header) so your server can verify the request is authentic.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			name, err := req.RequireString("name")
@@ -86,8 +100,8 @@ func RegisterWebhookTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_webhooks_get
 	s.AddTool(
 		mcp.NewTool("webex_webhooks_get",
-			mcp.WithDescription("Get details of a specific Webex webhook by its ID."),
-			mcp.WithString("webhookId", mcp.Required(), mcp.Description("The ID of the webhook to retrieve")),
+			mcp.WithDescription("Get full details of a specific webhook by its ID. Returns name, targetUrl, resource, event, filter, status, and creation/update timestamps."),
+			mcp.WithString("webhookId", mcp.Required(), mcp.Description("The ID of the webhook. Get this from webex_webhooks_list.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			webhookID, err := req.RequireString("webhookId")
@@ -108,12 +122,14 @@ func RegisterWebhookTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_webhooks_update
 	s.AddTool(
 		mcp.NewTool("webex_webhooks_update",
-			mcp.WithDescription("Update an existing Webex webhook."),
-			mcp.WithString("webhookId", mcp.Required(), mcp.Description("The ID of the webhook to update")),
-			mcp.WithString("name", mcp.Required(), mcp.Description("Updated name of the webhook")),
-			mcp.WithString("targetUrl", mcp.Required(), mcp.Description("Updated target URL")),
-			mcp.WithString("secret", mcp.Description("Updated secret for payload verification")),
-			mcp.WithString("status", mcp.Description("Webhook status: 'active' or 'inactive'")),
+			mcp.WithDescription("Update an existing webhook -- change its name, target URL, secret, or enable/disable it.\n"+
+				"\n"+
+				"TIP: Set status='inactive' to temporarily pause a webhook without deleting it. Set status='active' to re-enable."),
+			mcp.WithString("webhookId", mcp.Required(), mcp.Description("The ID of the webhook to update. Get this from webex_webhooks_list.")),
+			mcp.WithString("name", mcp.Required(), mcp.Description("The webhook name (pass existing name if not changing).")),
+			mcp.WithString("targetUrl", mcp.Required(), mcp.Description("The target URL (pass existing URL if not changing). Must be HTTPS.")),
+			mcp.WithString("secret", mcp.Description("Updated secret for payload signature verification. Pass empty string to remove the secret.")),
+			mcp.WithString("status", mcp.Description("Set to 'active' to enable or 'inactive' to disable the webhook without deleting it.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			webhookID, err := req.RequireString("webhookId")
@@ -149,8 +165,12 @@ func RegisterWebhookTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_webhooks_delete
 	s.AddTool(
 		mcp.NewTool("webex_webhooks_delete",
-			mcp.WithDescription("Delete a Webex webhook by its ID."),
-			mcp.WithString("webhookId", mcp.Required(), mcp.Description("The ID of the webhook to delete")),
+			mcp.WithDescription("Permanently delete a webhook. Webex will stop sending notifications to the target URL immediately.\n"+
+				"\n"+
+				"TIP: If you just want to temporarily stop notifications, use webex_webhooks_update with status='inactive' instead.\n"+
+				"\n"+
+				"IMPORTANT: Confirm with the user before deleting."),
+			mcp.WithString("webhookId", mcp.Required(), mcp.Description("The ID of the webhook to delete. Get this from webex_webhooks_list.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			webhookID, err := req.RequireString("webhookId")

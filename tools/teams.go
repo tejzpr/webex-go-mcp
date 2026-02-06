@@ -17,8 +17,16 @@ func RegisterTeamTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_teams_list
 	s.AddTool(
 		mcp.NewTool("webex_teams_list",
-			mcp.WithDescription("List Webex teams the authenticated user belongs to. Response is enriched with creator name, room count, and room names per team."),
-			mcp.WithNumber("max", mcp.Description("Maximum number of teams to return")),
+			mcp.WithDescription("List Webex teams the authenticated user belongs to. A team is an organizational container that groups related rooms/spaces together (like a department, project, or squad).\n"+
+				"\n"+
+				"WEBEX HIERARCHY: Teams contain Rooms. Rooms contain Messages. Members belong to both Teams and Rooms.\n"+
+				"\n"+
+				"COMMON TASKS:\n"+
+				"- 'What teams am I on?' -- Call this with no filters.\n"+
+				"- 'What rooms are in team X?' -- Use the teamId from this response with webex_rooms_list.\n"+
+				"\n"+
+				"RESPONSE: Enriched with creator name, room count, and a list of rooms (with titles) for each team -- so you don't need a follow-up call to see what's inside."),
+			mcp.WithNumber("max", mcp.Description("Maximum number of teams to return. Most users belong to a small number of teams.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			opts := &teams.ListOptions{}
@@ -72,9 +80,11 @@ func RegisterTeamTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_teams_create
 	s.AddTool(
 		mcp.NewTool("webex_teams_create",
-			mcp.WithDescription("Create a new Webex team."),
-			mcp.WithString("name", mcp.Required(), mcp.Description("Name of the team")),
-			mcp.WithString("description", mcp.Description("Description of the team")),
+			mcp.WithDescription("Create a new Webex team. A team is a container for related rooms/spaces. When you create a team, Webex automatically creates a 'General' room inside it.\n"+
+				"\n"+
+				"After creating a team, use webex_rooms_create with the teamId to add more rooms, and webex_memberships_create to add people to the team's rooms."),
+			mcp.WithString("name", mcp.Required(), mcp.Description("Name for the new team (e.g. 'Engineering', 'Project Alpha', 'Q1 Sprint Team').")),
+			mcp.WithString("description", mcp.Description("Optional description of the team's purpose.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			name, err := req.RequireString("name")
@@ -100,8 +110,18 @@ func RegisterTeamTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_teams_get
 	s.AddTool(
 		mcp.NewTool("webex_teams_get",
-			mcp.WithDescription("Get details of a specific Webex team by its ID. Response is enriched with creator info, full rooms list with member counts, and team members."),
-			mcp.WithString("teamId", mcp.Required(), mcp.Description("The ID of the team to retrieve")),
+			mcp.WithDescription("Get full details of a specific Webex team by its ID.\n"+
+				"\n"+
+				"RESPONSE: Heavily enriched with:\n"+
+				"- team: Full team details (name, description, creation date).\n"+
+				"- creator: Display name and email of who created the team.\n"+
+				"- rooms: All rooms/spaces in this team with their titles.\n"+
+				"- roomCount: Total number of rooms.\n"+
+				"- members: All team members with display names, emails, and moderator status.\n"+
+				"- memberCount: Total number of members.\n"+
+				"\n"+
+				"This is the best tool when the user asks 'tell me about team X' or 'who is on team X?' -- one call gets everything."),
+			mcp.WithString("teamId", mcp.Required(), mcp.Description("The ID of the team to retrieve. Get this from webex_teams_list.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			teamID, err := req.RequireString("teamId")
@@ -154,10 +174,12 @@ func RegisterTeamTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_teams_update
 	s.AddTool(
 		mcp.NewTool("webex_teams_update",
-			mcp.WithDescription("Update a Webex team (e.g., change its name)."),
-			mcp.WithString("teamId", mcp.Required(), mcp.Description("The ID of the team to update")),
-			mcp.WithString("name", mcp.Required(), mcp.Description("New name for the team")),
-			mcp.WithString("description", mcp.Description("New description for the team")),
+			mcp.WithDescription("Rename a Webex team or update its description. All team members will see the change.\n"+
+				"\n"+
+				"IMPORTANT: Confirm with the user before renaming a team."),
+			mcp.WithString("teamId", mcp.Required(), mcp.Description("The ID of the team to update. Get this from webex_teams_list.")),
+			mcp.WithString("name", mcp.Required(), mcp.Description("The new name for the team.")),
+			mcp.WithString("description", mcp.Description("Optional new description for the team.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			teamID, err := req.RequireString("teamId")
