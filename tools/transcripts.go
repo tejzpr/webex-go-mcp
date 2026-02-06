@@ -58,25 +58,24 @@ func RegisterTranscriptTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_transcripts_download
 	s.AddTool(
 		mcp.NewTool("webex_transcripts_download",
-			mcp.WithDescription("Download the full content of a Webex meeting transcript in plain text or VTT format. Optionally provide the meetingId for best results (as returned in the transcript's download links)."),
+			mcp.WithDescription("Download the full content of a Webex meeting transcript in plain text or VTT format. Both transcriptId and meetingId are required -- get them from webex_transcripts_list which returns both fields for each transcript."),
 			mcp.WithString("transcriptId", mcp.Required(), mcp.Description("The ID of the transcript to download")),
+			mcp.WithString("meetingId", mcp.Required(), mcp.Description("The meeting instance ID (returned as 'meetingId' in webex_transcripts_list results)")),
 			mcp.WithString("format", mcp.Description("Download format: 'txt' (plain text) or 'vtt' (WebVTT with timestamps). Default: 'txt'")),
-			mcp.WithString("meetingId", mcp.Description("Optional meeting instance ID to include in the download request (improves reliability)")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			transcriptID, err := req.RequireString("transcriptId")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
+			meetingID, err := req.RequireString("meetingId")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 
 			format := req.GetString("format", "txt")
 
-			var opts []*transcripts.DownloadOptions
-			if meetingID := req.GetString("meetingId", ""); meetingID != "" {
-				opts = append(opts, &transcripts.DownloadOptions{MeetingID: meetingID})
-			}
-
-			content, err := client.Transcripts().Download(transcriptID, format, opts...)
+			content, err := client.Transcripts().Download(transcriptID, format, &transcripts.DownloadOptions{MeetingID: meetingID})
 			if err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("Failed to download transcript: %v", err)), nil
 			}

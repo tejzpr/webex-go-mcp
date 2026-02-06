@@ -261,7 +261,7 @@ Add to your Cursor MCP configuration (`.cursor/mcp.json` in your project or `~/.
 ### Transcripts
 
 - **`webex_transcripts_list`** -- List meeting transcripts (filter by `meetingId`, `hostEmail`, date range)
-- **`webex_transcripts_download`** -- Download transcript content (`format`: `txt` or `vtt`, optional `meetingId` for best results)
+- **`webex_transcripts_download`** -- Download transcript content (requires `transcriptId` + `meetingId`, optional `format`: `txt` or `vtt`)
 - **`webex_transcripts_list_snippets`** -- List spoken segments from a transcript
 - **`webex_transcripts_get_snippet`** -- Get a specific transcript snippet
 - **`webex_transcripts_update_snippet`** -- Update/correct a transcript snippet's text
