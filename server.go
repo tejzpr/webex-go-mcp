@@ -10,13 +10,16 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
-func startServer(webexClient *webex.WebexClient, include, exclude string) error {
+func startServer(webexClient *webex.WebexClient, include, exclude string, minimal, readonlyMinimal bool) error {
 	s := server.NewMCPServer(
 		"webex-mcp",
 		version,
 		server.WithToolCapabilities(false),
 		server.WithRecovery(),
 	)
+
+	// Resolve preset flags into the include list
+	include = tools.ResolvePresets(minimal, readonlyMinimal, include)
 
 	// Build the tool registrar — either filtered or direct
 	filter := tools.NewToolFilter(include, exclude)

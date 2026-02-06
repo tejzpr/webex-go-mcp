@@ -38,6 +38,8 @@ Configuration is loaded via environment variables and/or CLI flags. CLI flags ta
 | `WEBEX_TIMEOUT` | `--timeout` | No | `30s` | HTTP request timeout |
 | `WEBEX_INCLUDE_TOOLS` | `--include` | No | - | Comma-separated list of tools to include (only these are registered) |
 | `WEBEX_EXCLUDE_TOOLS` | `--exclude` | No | - | Comma-separated list of tools to exclude (all others are registered) |
+| `WEBEX_MINIMAL` | `--minimal` | No | `false` | Enable minimal tool set (messages, rooms, teams, meetings, transcripts) |
+| `WEBEX_READONLY_MINIMAL` | `--readonly-minimal` | No | `false` | Enable readonly minimal tool set (read-only operations only) |
 
 ### Tool Filtering
 
@@ -65,6 +67,15 @@ The `category:action` shorthand maps to the full tool name `webex_{category}_{ac
 | `transcripts` | `list`, `download`, `list_snippets`, `get_snippet`, `update_snippet` |
 | `webhooks` | `list`, `create`, `get`, `update`, `delete` |
 
+#### Preset Flags
+
+For convenience, two preset flags are available that automatically add a curated set of tools to the `--include` list:
+
+- **`--minimal`** -- All operations for messages, rooms, teams, meetings, and transcripts (excludes memberships and webhooks). **22 tools.**
+- **`--readonly-minimal`** -- Only read/list/get operations for messages, rooms, teams, meetings, and transcripts. No create, update, or delete. **12 tools.**
+
+These flags **merge** with `--include` -- they don't override it. For example, `--minimal --include "webhooks:list"` registers the minimal set plus `webhooks:list`. If both `--minimal` and `--readonly-minimal` are set, `--minimal` takes priority.
+
 **Examples:**
 
 ```bash
@@ -73,6 +84,15 @@ The `category:action` shorthand maps to the full tool name `webex_{category}_{ac
 
 # Register all tools except destructive ones
 ./webex-go-mcp --exclude "messages:delete,rooms:delete,meetings:delete,memberships:delete,webhooks:delete"
+
+# Use the minimal preset (messages, rooms, teams, meetings, transcripts)
+./webex-go-mcp --minimal
+
+# Use readonly-minimal (only read operations, no writes)
+./webex-go-mcp --readonly-minimal
+
+# Minimal preset plus an extra tool
+./webex-go-mcp --minimal --include "webhooks:list"
 ```
 
 ## Usage
@@ -173,6 +193,22 @@ Add to your Cursor MCP configuration (`.cursor/mcp.json` in your project or `~/.
     "webex": {
       "command": "go",
       "args": ["run", "github.com/tejzpr/webex-go-mcp@latest", "--include", "messages:list,messages:get,transcripts:list,transcripts:download"],
+      "env": {
+        "WEBEX_ACCESS_TOKEN": "<WEBEX_ACCESS_TOKEN>"
+      }
+    }
+  }
+}
+```
+
+**With readonly-minimal preset (safe, read-only access):**
+
+```json
+{
+  "mcpServers": {
+    "webex": {
+      "command": "go",
+      "args": ["run", "github.com/tejzpr/webex-go-mcp@latest", "--readonly-minimal"],
       "env": {
         "WEBEX_ACCESS_TOKEN": "<WEBEX_ACCESS_TOKEN>"
       }

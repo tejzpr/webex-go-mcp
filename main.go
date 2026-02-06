@@ -31,6 +31,8 @@ func main() {
 	rootCmd.Flags().Duration("timeout", 30*time.Second, "HTTP request timeout (env: WEBEX_TIMEOUT)")
 	rootCmd.Flags().String("include", "", "Comma-separated list of tools to include (category:action format, e.g. messages:list,meetings:create). Only these tools will be registered. (env: WEBEX_INCLUDE_TOOLS)")
 	rootCmd.Flags().String("exclude", "", "Comma-separated list of tools to exclude (category:action format, e.g. messages:delete,rooms:delete). All tools except these will be registered. (env: WEBEX_EXCLUDE_TOOLS)")
+	rootCmd.Flags().Bool("minimal", false, "Enable a minimal tool set: messages, rooms, teams, meetings, and transcripts. Adds to --include. (env: WEBEX_MINIMAL)")
+	rootCmd.Flags().Bool("readonly-minimal", false, "Enable a readonly minimal tool set: only read/list/get operations for messages, rooms, teams, meetings, and transcripts. Adds to --include. (env: WEBEX_READONLY_MINIMAL)")
 
 	// Bind flags to viper
 	_ = viper.BindPFlag("access_token", rootCmd.Flags().Lookup("access-token"))
@@ -38,6 +40,8 @@ func main() {
 	_ = viper.BindPFlag("timeout", rootCmd.Flags().Lookup("timeout"))
 	_ = viper.BindPFlag("include_tools", rootCmd.Flags().Lookup("include"))
 	_ = viper.BindPFlag("exclude_tools", rootCmd.Flags().Lookup("exclude"))
+	_ = viper.BindPFlag("minimal", rootCmd.Flags().Lookup("minimal"))
+	_ = viper.BindPFlag("readonly_minimal", rootCmd.Flags().Lookup("readonly-minimal"))
 
 	// Bind environment variables
 	viper.SetEnvPrefix("WEBEX")
@@ -46,6 +50,8 @@ func main() {
 	_ = viper.BindEnv("timeout", "WEBEX_TIMEOUT")
 	_ = viper.BindEnv("include_tools", "WEBEX_INCLUDE_TOOLS")
 	_ = viper.BindEnv("exclude_tools", "WEBEX_EXCLUDE_TOOLS")
+	_ = viper.BindEnv("minimal", "WEBEX_MINIMAL")
+	_ = viper.BindEnv("readonly_minimal", "WEBEX_READONLY_MINIMAL")
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -79,7 +85,9 @@ func run(cmd *cobra.Command, args []string) error {
 	// Tool filtering
 	includeTools := viper.GetString("include_tools")
 	excludeTools := viper.GetString("exclude_tools")
+	minimal := viper.GetBool("minimal")
+	readonlyMinimal := viper.GetBool("readonly_minimal")
 
 	// Start the MCP server
-	return startServer(webexClient, includeTools, excludeTools)
+	return startServer(webexClient, includeTools, excludeTools, minimal, readonlyMinimal)
 }

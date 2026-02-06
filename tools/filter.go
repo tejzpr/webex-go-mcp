@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"context"
 	"log"
 	"strings"
 
@@ -149,13 +148,50 @@ func normalizeToolName(entry string) []string {
 	return candidates
 }
 
-// contextKey is an unexported type for context keys in this package.
-type contextKey struct{}
-
-// ToolFilterFromContext retrieves a ToolFilter from context (unused for now, available for future use).
-func ToolFilterFromContext(ctx context.Context) *ToolFilter {
-	if f, ok := ctx.Value(contextKey{}).(*ToolFilter); ok {
-		return f
+// Preset tool lists for --minimal and --readonly-minimal flags.
+// These are full tool names (webex_{category}_{action}).
+var (
+	// PresetMinimal includes all tools for messages, rooms, teams, meetings, and transcripts.
+	// Excludes memberships and webhooks.
+	PresetMinimal = []string{
+		"webex_messages_list", "webex_messages_create", "webex_messages_get", "webex_messages_delete",
+		"webex_rooms_list", "webex_rooms_create", "webex_rooms_get", "webex_rooms_update", "webex_rooms_delete",
+		"webex_teams_list", "webex_teams_create", "webex_teams_get", "webex_teams_update",
+		"webex_meetings_list", "webex_meetings_create", "webex_meetings_get", "webex_meetings_update", "webex_meetings_delete",
+		"webex_transcripts_list", "webex_transcripts_download", "webex_transcripts_list_snippets", "webex_transcripts_get_snippet", "webex_transcripts_update_snippet",
 	}
-	return nil
+
+	// PresetReadonlyMinimal includes only read/GET tools for messages, rooms, teams, meetings, and transcripts.
+	// No create, update, or delete operations.
+	PresetReadonlyMinimal = []string{
+		"webex_messages_list", "webex_messages_get",
+		"webex_rooms_list", "webex_rooms_get",
+		"webex_teams_list", "webex_teams_get",
+		"webex_meetings_list", "webex_meetings_get",
+		"webex_transcripts_list", "webex_transcripts_download", "webex_transcripts_list_snippets", "webex_transcripts_get_snippet",
+	}
+)
+
+// ResolvePresets merges preset flags into the include string.
+// Preset tools are added to the include list (they don't override --include or --exclude).
+// If both minimal and readonlyMinimal are true, minimal takes priority (it's a superset).
+func ResolvePresets(minimal, readonlyMinimal bool, include string) string {
+	var preset []string
+	switch {
+	case minimal:
+		preset = PresetMinimal
+		log.Println("--minimal flag active: adding minimal tool set to include list")
+	case readonlyMinimal:
+		preset = PresetReadonlyMinimal
+		log.Println("--readonly-minimal flag active: adding readonly-minimal tool set to include list")
+	default:
+		return include
+	}
+
+	// Merge: prepend preset tools to whatever the user already specified in --include
+	presetStr := strings.Join(preset, ",")
+	if include == "" {
+		return presetStr
+	}
+	return presetStr + "," + include
 }
