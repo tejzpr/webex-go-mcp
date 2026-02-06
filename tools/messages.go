@@ -127,27 +127,28 @@ func RegisterMessageTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_messages_create
 	s.AddTool(
 		mcp.NewTool("webex_messages_create",
-			mcp.WithDescription("Send a message to a Webex room/space or directly to a person.\n"+
+			mcp.WithDescription("Send a text message to a person or room in Webex.\n"+
 				"\n"+
-				"TO DM SOMEONE: Just pass their email address as 'toPersonEmail' -- this is the easiest way. You do NOT need to look up their personId or find a roomId first. Webex automatically creates or reuses the 1:1 room.\n"+
+				"WHEN THE USER SAYS 'send a message to <email>' or 'message <name>@<domain>' or 'DM <email>':\n"+
+				"→ Use toPersonEmail with their email address. That's it. ONE call. Do NOT look up rooms, people, or IDs first.\n"+
 				"\n"+
-				"TO MESSAGE A GROUP SPACE: Use 'roomId'. Get the roomId from webex_rooms_list.\n"+
+				"WHEN THE USER SAYS 'send a message to <room name>' or 'post in <space name>':\n"+
+				"→ Use webex_rooms_list to find the roomId, then use roomId here.\n"+
 				"\n"+
-				"DESTINATION (exactly one required):\n"+
-				"- toPersonEmail: The simplest way to DM someone. Just pass their email (e.g. 'alice@example.com').\n"+
-				"- toPersonId: DM someone by their Webex person ID (use if you already have it from another API response).\n"+
-				"- roomId: Send to a specific room/space (group rooms or existing 1:1 rooms).\n"+
+				"QUICK REFERENCE:\n"+
+				"- Have an email? → toPersonEmail (direct DM, no lookup needed)\n"+
+				"- Have a room/space name? → find roomId via webex_rooms_list first, then roomId\n"+
+				"- Have a personId from a previous call? → toPersonId\n"+
+				"- Have a roomId from a previous call? → roomId\n"+
 				"\n"+
-				"CONTENT (at least one required):\n"+
-				"- text: Plain text message.\n"+
-				"- markdown: Rich message with Webex-flavored markdown (supports bold, italic, links, mentions, code blocks, lists).\n"+
+				"To send files/attachments, use webex_messages_send_attachment instead.\n"+
 				"\n"+
-				"IMPORTANT: Always confirm with the user before sending a message, unless the user has explicitly asked you not to confirm."),
-			mcp.WithString("roomId", mcp.Description("The room/space ID to send the message to. Use this for group spaces. Get the ID from webex_rooms_list or a previous API response.")),
-			mcp.WithString("toPersonId", mcp.Description("The person ID to send a direct 1:1 message to. Use only if you already have their personId from another API response. Otherwise prefer toPersonEmail.")),
-			mcp.WithString("toPersonEmail", mcp.Description("The email address to send a direct 1:1 message to (e.g. 'alice@example.com'). This is the EASIEST way to DM someone -- no room lookup or person lookup needed. Webex automatically creates or reuses the 1:1 room.")),
-			mcp.WithString("text", mcp.Description("Plain text message content. At least one of 'text' or 'markdown' is required.")),
-			mcp.WithString("markdown", mcp.Description("Rich text message content using Webex-flavored markdown. Supports **bold**, *italic*, [links](url), @mentions, `code`, code blocks, and lists. Preferred over 'text' when formatting is desired.")),
+				"IMPORTANT: Always confirm with the user before sending, unless they explicitly said not to."),
+			mcp.WithString("roomId", mcp.Description("Room/space ID. Use ONLY when sending to a group space or when you already have a roomId. Do NOT look up a room just to DM someone -- use toPersonEmail instead.")),
+			mcp.WithString("toPersonId", mcp.Description("Person ID for a direct 1:1 message. Use only if you already have it from a previous API response.")),
+			mcp.WithString("toPersonEmail", mcp.Description("Email address for a direct 1:1 message (e.g. 'alice@example.com'). USE THIS when the user provides an email. No room lookup or person lookup needed -- Webex handles everything.")),
+			mcp.WithString("text", mcp.Description("Plain text message content.")),
+			mcp.WithString("markdown", mcp.Description("Rich text using Webex markdown (bold, italic, links, code blocks, lists). Use this when formatting is desired.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			msg := &messages.Message{
@@ -168,6 +169,82 @@ func RegisterMessageTools(s ToolRegistrar, client *webex.WebexClient) {
 			result, err := client.Messages().Create(msg)
 			if err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("Failed to create message: %v", err)), nil
+			}
+
+			data, _ := json.MarshalIndent(result, "", "  ")
+			return mcp.NewToolResultText(string(data)), nil
+		},
+	)
+
+	// webex_messages_send_attachment
+	s.AddTool(
+		mcp.NewTool("webex_messages_send_attachment",
+			mcp.WithDescription("Send a message with a file attachment to a person or room in Webex.\n"+
+				"\n"+
+				"DESTINATION: Same as webex_messages_create -- use toPersonEmail for DMs (email is enough, no lookup needed), or roomId for group spaces.\n"+
+				"\n"+
+				"TWO WAYS TO ATTACH A FILE (provide exactly one):\n"+
+				"1. fileUrl -- A publicly accessible URL (e.g. 'https://example.com/report.pdf'). Webex downloads the file from this URL.\n"+
+				"2. fileBase64 + fileName -- Base64-encoded file content with a filename. Use this to upload files directly (e.g. generated reports, images, CSVs).\n"+
+				"\n"+
+				"You can optionally include a text or markdown message along with the file.\n"+
+				"\n"+
+				"LIMITATIONS:\n"+
+				"- One file per message.\n"+
+				"- Max file size: 100MB.\n"+
+				"- For fileUrl: the URL must be publicly accessible (no auth-required URLs).\n"+
+				"\n"+
+				"IMPORTANT: Always confirm with the user before sending."),
+			mcp.WithString("roomId", mcp.Description("Room/space ID. Use when sending to a group space or when you already have a roomId.")),
+			mcp.WithString("toPersonId", mcp.Description("Person ID for a direct 1:1 message. Use only if you already have it.")),
+			mcp.WithString("toPersonEmail", mcp.Description("Email address for a direct 1:1 message (e.g. 'alice@example.com'). No lookup needed.")),
+			mcp.WithString("fileUrl", mcp.Description("A publicly accessible URL of the file to attach (e.g. 'https://example.com/report.pdf'). Webex downloads and attaches it. Use EITHER this OR fileBase64+fileName, not both.")),
+			mcp.WithString("fileBase64", mcp.Description("Base64-encoded file content. Use with 'fileName' to upload a file directly. Use EITHER this OR fileUrl, not both.")),
+			mcp.WithString("fileName", mcp.Description("The filename for the base64 upload (e.g. 'report.pdf', 'data.csv'). Required when using fileBase64.")),
+			mcp.WithString("text", mcp.Description("Optional plain text message to include with the file.")),
+			mcp.WithString("markdown", mcp.Description("Optional rich text message (Webex markdown) to include with the file.")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			msg := &messages.Message{
+				RoomID:        req.GetString("roomId", ""),
+				ToPersonID:    req.GetString("toPersonId", ""),
+				ToPersonEmail: req.GetString("toPersonEmail", ""),
+				Text:          req.GetString("text", ""),
+				Markdown:      req.GetString("markdown", ""),
+			}
+
+			if msg.RoomID == "" && msg.ToPersonID == "" && msg.ToPersonEmail == "" {
+				return mcp.NewToolResultError("One of roomId, toPersonId, or toPersonEmail is required"), nil
+			}
+
+			fileURL := req.GetString("fileUrl", "")
+			fileBase64 := req.GetString("fileBase64", "")
+			fileName := req.GetString("fileName", "")
+
+			if fileURL == "" && fileBase64 == "" {
+				return mcp.NewToolResultError("Either 'fileUrl' (public URL) or 'fileBase64' + 'fileName' (base64 data) is required"), nil
+			}
+			if fileURL != "" && fileBase64 != "" {
+				return mcp.NewToolResultError("Provide either 'fileUrl' or 'fileBase64', not both"), nil
+			}
+
+			var result *messages.Message
+			var err error
+
+			if fileBase64 != "" {
+				// Base64 upload via multipart form
+				if fileName == "" {
+					return mcp.NewToolResultError("'fileName' is required when using 'fileBase64' (e.g. 'report.pdf')"), nil
+				}
+				result, err = client.Messages().CreateWithBase64File(msg, fileName, fileBase64)
+			} else {
+				// URL-based attachment
+				msg.Files = []string{fileURL}
+				result, err = client.Messages().Create(msg)
+			}
+
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to send attachment: %v", err)), nil
 			}
 
 			data, _ := json.MarshalIndent(result, "", "  ")

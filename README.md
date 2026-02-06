@@ -4,11 +4,11 @@ A Go-based STDIO [Model Context Protocol (MCP)](https://modelcontextprotocol.io/
 
 ## Features
 
-**32 MCP tools** across 7 Webex API resource categories:
+**33 MCP tools** across 7 Webex API resource categories:
 
 | Category | Tools | Operations |
 |---|---|---|
-| **Messages** | 4 | List, create, get, delete messages in rooms |
+| **Messages** | 5 | List, create, send attachment, get, delete messages |
 | **Rooms** | 5 | List, create, get, update, delete rooms/spaces |
 | **Teams** | 4 | List, create, get, update teams |
 | **Memberships** | 4 | List, create, update, delete room memberships |
@@ -53,13 +53,13 @@ The `category:action` shorthand maps to the full tool name `webex_{category}_{ac
 - If `--include` is set, only the specified tools are registered.
 - If `--exclude` is set, all tools except the specified ones are registered.
 - If both are set, `--include` takes priority and `--exclude` is ignored.
-- If neither is set, all 32 tools are registered (default).
+- If neither is set, all 33 tools are registered (default).
 
 **Available categories and actions:**
 
 | Category | Actions |
 |---|---|
-| `messages` | `list`, `create`, `get`, `delete` |
+| `messages` | `list`, `create`, `send_attachment`, `get`, `delete` |
 | `rooms` | `list`, `create`, `get`, `update`, `delete` |
 | `teams` | `list`, `create`, `get`, `update` |
 | `memberships` | `list`, `create`, `update`, `delete` |
@@ -71,7 +71,7 @@ The `category:action` shorthand maps to the full tool name `webex_{category}_{ac
 
 For convenience, two preset flags are available that automatically add a curated set of tools to the `--include` list:
 
-- **`--minimal`** -- All operations for messages, rooms, teams, meetings, and transcripts (excludes memberships and webhooks). **22 tools.**
+- **`--minimal`** -- All operations for messages, rooms, teams, meetings, and transcripts (excludes memberships and webhooks). **23 tools.**
 - **`--readonly-minimal`** -- Only read/list/get operations for messages, rooms, teams, meetings, and transcripts. No create, update, or delete. **12 tools.**
 
 These flags **merge** with `--include` -- they don't override it. For example, `--minimal --include "webhooks:list"` registers the minimal set plus `webhooks:list`. If both `--minimal` and `--readonly-minimal` are set, `--minimal` takes priority.
@@ -223,9 +223,10 @@ Add to your Cursor MCP configuration (`.cursor/mcp.json` in your project or `~/.
 
 ### Messages
 
-- **`webex_messages_list`** -- List messages in a room (requires `roomId`)
-- **`webex_messages_create`** -- Send a message (provide `roomId`, `toPersonId`, or `toPersonEmail` + `text` or `markdown`)
-- **`webex_messages_get`** -- Get a message by ID
+- **`webex_messages_list`** -- List messages in a room (requires `roomId`). Enriched with room context, sender names, and file metadata.
+- **`webex_messages_create`** -- Send a text message. To DM someone, just pass `toPersonEmail` -- no room lookup needed. For group spaces, use `roomId`.
+- **`webex_messages_send_attachment`** -- Send a message with a file attachment (public URL). Same destination options as create.
+- **`webex_messages_get`** -- Get a message by ID. Enriched with sender profile, room info, and file content (text files inline).
 - **`webex_messages_delete`** -- Delete a message by ID
 
 ### Rooms / Spaces
