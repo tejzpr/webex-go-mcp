@@ -7,6 +7,8 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	webex "github.com/tejzpr/webex-go-sdk/v2"
+	"github.com/tejzpr/webex-go-sdk/v2/memberships"
+	"github.com/tejzpr/webex-go-sdk/v2/messages"
 	"github.com/tejzpr/webex-go-sdk/v2/rooms"
 )
 
@@ -15,7 +17,7 @@ func RegisterRoomTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_rooms_list
 	s.AddTool(
 		mcp.NewTool("webex_rooms_list",
-			mcp.WithDescription("List Webex rooms/spaces the authenticated user belongs to."),
+			mcp.WithDescription("List Webex rooms/spaces the authenticated user belongs to. Response is enriched with team name, member count, and last message preview per room."),
 			mcp.WithString("teamId", mcp.Description("Filter rooms by team ID")),
 			mcp.WithString("type", mcp.Description("Filter by room type: 'direct' (1:1) or 'group'")),
 			mcp.WithString("sortBy", mcp.Description("Sort by: 'id', 'lastactivity', or 'created'")),
@@ -42,7 +44,50 @@ func RegisterRoomTools(s ToolRegistrar, client *webex.WebexClient) {
 				return mcp.NewToolResultError(fmt.Sprintf("Failed to list rooms: %v", err)), nil
 			}
 
-			data, _ := json.MarshalIndent(page.Items, "", "  ")
+			// Enrich each room
+			teamCache := NewTeamNameCache(client)
+			enrichedRooms := make([]map[string]interface{}, 0, len(page.Items))
+
+			for _, room := range page.Items {
+				er := map[string]interface{}{
+					"room": room,
+				}
+
+				// Enrich: team name
+				if room.TeamID != "" {
+					if name := teamCache.Resolve(room.TeamID); name != "" {
+						er["teamName"] = name
+					}
+				}
+
+				// Enrich: member count
+				if memberPage, mErr := client.Memberships().List(&memberships.ListOptions{
+					RoomID: room.ID,
+				}); mErr == nil {
+					er["memberCount"] = len(memberPage.Items)
+				}
+
+				// Enrich: last message preview
+				if msgPage, mErr := client.Messages().List(&messages.ListOptions{
+					RoomID: room.ID,
+					Max:    1,
+				}); mErr == nil && len(msgPage.Items) > 0 {
+					lastMsg := msgPage.Items[0]
+					preview := lastMsg.Text
+					if len(preview) > 200 {
+						preview = preview[:200] + "..."
+					}
+					senderName := lastMsg.PersonEmail
+					if senderName == "" {
+						senderName = lastMsg.PersonID
+					}
+					er["lastMessagePreview"] = fmt.Sprintf("%s: %s", senderName, preview)
+				}
+
+				enrichedRooms = append(enrichedRooms, er)
+			}
+
+			data, _ := json.MarshalIndent(enrichedRooms, "", "  ")
 			return mcp.NewToolResultText(string(data)), nil
 		},
 	)
@@ -78,7 +123,7 @@ func RegisterRoomTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_rooms_get
 	s.AddTool(
 		mcp.NewTool("webex_rooms_get",
-			mcp.WithDescription("Get details of a specific Webex room/space by its ID."),
+			mcp.WithDescription("Get details of a specific Webex room/space by its ID. Response is enriched with team info, creator name, full member list, and recent messages with sender names."),
 			mcp.WithString("roomId", mcp.Required(), mcp.Description("The ID of the room to retrieve")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -92,7 +137,63 @@ func RegisterRoomTools(s ToolRegistrar, client *webex.WebexClient) {
 				return mcp.NewToolResultError(fmt.Sprintf("Failed to get room: %v", err)), nil
 			}
 
-			data, _ := json.MarshalIndent(result, "", "  ")
+			// Build enriched response
+			response := map[string]interface{}{
+				"room": result,
+			}
+
+			// Enrich: team
+			if result.TeamID != "" {
+				if team, tErr := client.Teams().Get(result.TeamID); tErr == nil {
+					response["team"] = map[string]interface{}{
+						"id":   team.ID,
+						"name": team.Name,
+					}
+				}
+			}
+
+			// Enrich: creator
+			if name := resolvePersonName(client, result.CreatorID); name != "" {
+				response["creator"] = map[string]interface{}{
+					"id":          result.CreatorID,
+					"displayName": name,
+				}
+			}
+
+			// Enrich: members (already includes personDisplayName)
+			if memberPage, mErr := client.Memberships().List(&memberships.ListOptions{
+				RoomID: roomID,
+			}); mErr == nil {
+				response["members"] = memberPage.Items
+				response["memberCount"] = len(memberPage.Items)
+			}
+
+			// Enrich: recent messages with sender names
+			if msgPage, mErr := client.Messages().List(&messages.ListOptions{
+				RoomID: roomID,
+				Max:    5,
+			}); mErr == nil && len(msgPage.Items) > 0 {
+				nameCache := NewPersonNameCache(client)
+				recentMsgs := make([]map[string]interface{}, 0, len(msgPage.Items))
+				for _, msg := range msgPage.Items {
+					rm := map[string]interface{}{
+						"id":          msg.ID,
+						"text":        msg.Text,
+						"personEmail": msg.PersonEmail,
+						"created":     msg.Created,
+					}
+					if name := nameCache.Resolve(msg.PersonID); name != "" {
+						rm["senderName"] = name
+					}
+					if len(msg.Files) > 0 {
+						rm["fileCount"] = len(msg.Files)
+					}
+					recentMsgs = append(recentMsgs, rm)
+				}
+				response["recentMessages"] = recentMsgs
+			}
+
+			data, _ := json.MarshalIndent(response, "", "  ")
 			return mcp.NewToolResultText(string(data)), nil
 		},
 	)

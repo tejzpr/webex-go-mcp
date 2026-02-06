@@ -15,7 +15,7 @@ func RegisterMembershipTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_memberships_list
 	s.AddTool(
 		mcp.NewTool("webex_memberships_list",
-			mcp.WithDescription("List memberships (people in rooms). Filter by roomId or personEmail."),
+			mcp.WithDescription("List memberships (people in rooms). Filter by roomId or personEmail. Response is enriched with room title when a roomId filter is provided. Membership objects already include personDisplayName."),
 			mcp.WithString("roomId", mcp.Description("Filter by room ID")),
 			mcp.WithString("personId", mcp.Description("Filter by person ID")),
 			mcp.WithString("personEmail", mcp.Description("Filter by person email")),
@@ -24,8 +24,9 @@ func RegisterMembershipTools(s ToolRegistrar, client *webex.WebexClient) {
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			opts := &memberships.ListOptions{}
 
-			if v := req.GetString("roomId", ""); v != "" {
-				opts.RoomID = v
+			roomID := req.GetString("roomId", "")
+			if roomID != "" {
+				opts.RoomID = roomID
 			}
 			if v := req.GetString("personId", ""); v != "" {
 				opts.PersonID = v
@@ -42,7 +43,19 @@ func RegisterMembershipTools(s ToolRegistrar, client *webex.WebexClient) {
 				return mcp.NewToolResultError(fmt.Sprintf("Failed to list memberships: %v", err)), nil
 			}
 
-			data, _ := json.MarshalIndent(page.Items, "", "  ")
+			// Build enriched response
+			response := map[string]interface{}{
+				"memberships": page.Items,
+			}
+
+			// Enrich: room title when roomId is provided
+			if roomID != "" {
+				if roomInfo := resolveRoomInfo(client, roomID); roomInfo != nil {
+					response["room"] = roomInfo
+				}
+			}
+
+			data, _ := json.MarshalIndent(response, "", "  ")
 			return mcp.NewToolResultText(string(data)), nil
 		},
 	)

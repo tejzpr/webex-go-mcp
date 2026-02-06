@@ -7,6 +7,8 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	webex "github.com/tejzpr/webex-go-sdk/v2"
+	"github.com/tejzpr/webex-go-sdk/v2/rooms"
+	"github.com/tejzpr/webex-go-sdk/v2/teammemberships"
 	"github.com/tejzpr/webex-go-sdk/v2/teams"
 )
 
@@ -15,7 +17,7 @@ func RegisterTeamTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_teams_list
 	s.AddTool(
 		mcp.NewTool("webex_teams_list",
-			mcp.WithDescription("List Webex teams the authenticated user belongs to."),
+			mcp.WithDescription("List Webex teams the authenticated user belongs to. Response is enriched with creator name, room count, and room names per team."),
 			mcp.WithNumber("max", mcp.Description("Maximum number of teams to return")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -30,7 +32,39 @@ func RegisterTeamTools(s ToolRegistrar, client *webex.WebexClient) {
 				return mcp.NewToolResultError(fmt.Sprintf("Failed to list teams: %v", err)), nil
 			}
 
-			data, _ := json.MarshalIndent(page.Items, "", "  ")
+			// Enrich each team
+			nameCache := NewPersonNameCache(client)
+			enrichedTeams := make([]map[string]interface{}, 0, len(page.Items))
+
+			for _, team := range page.Items {
+				et := map[string]interface{}{
+					"team": team,
+				}
+
+				// Enrich: creator name
+				if name := nameCache.Resolve(team.CreatorID); name != "" {
+					et["creatorName"] = name
+				}
+
+				// Enrich: rooms for this team
+				if roomPage, rErr := client.Rooms().List(&rooms.ListOptions{
+					TeamID: team.ID,
+				}); rErr == nil {
+					et["roomCount"] = len(roomPage.Items)
+					roomSummaries := make([]map[string]interface{}, 0, len(roomPage.Items))
+					for _, r := range roomPage.Items {
+						roomSummaries = append(roomSummaries, map[string]interface{}{
+							"id":    r.ID,
+							"title": r.Title,
+						})
+					}
+					et["rooms"] = roomSummaries
+				}
+
+				enrichedTeams = append(enrichedTeams, et)
+			}
+
+			data, _ := json.MarshalIndent(enrichedTeams, "", "  ")
 			return mcp.NewToolResultText(string(data)), nil
 		},
 	)
@@ -66,7 +100,7 @@ func RegisterTeamTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_teams_get
 	s.AddTool(
 		mcp.NewTool("webex_teams_get",
-			mcp.WithDescription("Get details of a specific Webex team by its ID."),
+			mcp.WithDescription("Get details of a specific Webex team by its ID. Response is enriched with creator info, full rooms list with member counts, and team members."),
 			mcp.WithString("teamId", mcp.Required(), mcp.Description("The ID of the team to retrieve")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -80,7 +114,39 @@ func RegisterTeamTools(s ToolRegistrar, client *webex.WebexClient) {
 				return mcp.NewToolResultError(fmt.Sprintf("Failed to get team: %v", err)), nil
 			}
 
-			data, _ := json.MarshalIndent(result, "", "  ")
+			// Build enriched response
+			response := map[string]interface{}{
+				"team": result,
+			}
+
+			// Enrich: creator
+			if result.CreatorID != "" {
+				if person, pErr := client.People().Get(result.CreatorID); pErr == nil {
+					response["creator"] = map[string]interface{}{
+						"id":          person.ID,
+						"displayName": person.DisplayName,
+						"emails":      person.Emails,
+					}
+				}
+			}
+
+			// Enrich: rooms for this team
+			if roomPage, rErr := client.Rooms().List(&rooms.ListOptions{
+				TeamID: teamID,
+			}); rErr == nil {
+				response["rooms"] = roomPage.Items
+				response["roomCount"] = len(roomPage.Items)
+			}
+
+			// Enrich: team members
+			if memberPage, mErr := client.TeamMemberships().List(&teammemberships.ListOptions{
+				TeamID: teamID,
+			}); mErr == nil {
+				response["members"] = memberPage.Items
+				response["memberCount"] = len(memberPage.Items)
+			}
+
+			data, _ := json.MarshalIndent(response, "", "  ")
 			return mcp.NewToolResultText(string(data)), nil
 		},
 	)

@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	webex "github.com/tejzpr/webex-go-sdk/v2"
 	"github.com/tejzpr/webex-go-sdk/v2/meetings"
+	"github.com/tejzpr/webex-go-sdk/v2/transcripts"
 )
 
 // RegisterMeetingTools registers all meeting-related MCP tools.
@@ -19,7 +21,8 @@ func RegisterMeetingTools(s ToolRegistrar, client *webex.WebexClient) {
 				"- No meetingType → returns meetingSeries (recurring definitions, not day-specific instances).\n"+
 				"- meetingType='meeting' → returns instances that have already started or ended. Use with state='ended' and a from/to range to list past meetings.\n"+
 				"- meetingType='scheduledMeeting' → returns upcoming scheduled occurrences. Use this for 'meetings of the day' with a from/to range covering today.\n"+
-				"IMPORTANT: 'meetingType' is required whenever 'state' is used as a filter."),
+				"IMPORTANT: 'meetingType' is required whenever 'state' is used as a filter.\n"+
+				"Response is enriched: for each meeting with hasTranscription=true, transcript IDs and meetingId are included so you can download transcripts directly without additional calls."),
 			mcp.WithString("meetingType", mcp.Description("Controls what is returned: 'meetingSeries' (recurring definitions), 'scheduledMeeting' (upcoming occurrences — use for today's meetings), or 'meeting' (instances that started/ended — use for past meetings). Required when 'state' is specified.")),
 			mcp.WithString("state", mcp.Description("Filter by state: 'active', 'scheduled', 'ready', 'lobby', 'connected', 'started', 'ended', 'missed', 'expired'. Requires 'meetingType' to also be set.")),
 			mcp.WithString("scheduledType", mcp.Description("Filter by scheduled type: 'meeting', 'webinar', 'personalRoomMeeting'")),
@@ -62,7 +65,36 @@ func RegisterMeetingTools(s ToolRegistrar, client *webex.WebexClient) {
 				return mcp.NewToolResultError(fmt.Sprintf("Failed to list meetings: %v", err)), nil
 			}
 
-			data, _ := json.MarshalIndent(page.Items, "", "  ")
+			// Enrich each meeting with transcript info if hasTranscription
+			enrichedMeetings := make([]map[string]interface{}, 0, len(page.Items))
+			for _, meeting := range page.Items {
+				em := map[string]interface{}{
+					"meeting": meeting,
+				}
+
+				// Enrich: transcripts for meetings that have them
+				if meeting.HasTranscription {
+					if tPage, tErr := client.Transcripts().List(&transcripts.ListOptions{
+						MeetingID: meeting.ID,
+					}); tErr == nil && len(tPage.Items) > 0 {
+						transcriptSummaries := make([]map[string]interface{}, 0, len(tPage.Items))
+						for _, t := range tPage.Items {
+							transcriptSummaries = append(transcriptSummaries, map[string]interface{}{
+								"transcriptId": t.ID,
+								"meetingId":    t.MeetingID,
+								"status":       t.Status,
+							})
+						}
+						em["transcripts"] = transcriptSummaries
+					} else if tErr != nil {
+						log.Printf("Enrichment: failed to list transcripts for meeting %s: %v", meeting.ID, tErr)
+					}
+				}
+
+				enrichedMeetings = append(enrichedMeetings, em)
+			}
+
+			data, _ := json.MarshalIndent(enrichedMeetings, "", "  ")
 			return mcp.NewToolResultText(string(data)), nil
 		},
 	)
@@ -118,7 +150,7 @@ func RegisterMeetingTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_meetings_get
 	s.AddTool(
 		mcp.NewTool("webex_meetings_get",
-			mcp.WithDescription("Get details of a specific Webex meeting by its ID."),
+			mcp.WithDescription("Get details of a specific Webex meeting by its ID. Response is enriched with host display name and transcript IDs (with meetingId) ready for download."),
 			mcp.WithString("meetingId", mcp.Required(), mcp.Description("The ID of the meeting to retrieve")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -132,7 +164,38 @@ func RegisterMeetingTools(s ToolRegistrar, client *webex.WebexClient) {
 				return mcp.NewToolResultError(fmt.Sprintf("Failed to get meeting: %v", err)), nil
 			}
 
-			data, _ := json.MarshalIndent(result, "", "  ")
+			// Build enriched response
+			response := map[string]interface{}{
+				"meeting": result,
+			}
+
+			// Enrich: host name
+			if result.HostUserID != "" {
+				if name := resolvePersonName(client, result.HostUserID); name != "" {
+					response["hostName"] = name
+				}
+			}
+
+			// Enrich: transcripts
+			if result.HasTranscription {
+				if tPage, tErr := client.Transcripts().List(&transcripts.ListOptions{
+					MeetingID: result.ID,
+				}); tErr == nil && len(tPage.Items) > 0 {
+					transcriptSummaries := make([]map[string]interface{}, 0, len(tPage.Items))
+					for _, t := range tPage.Items {
+						transcriptSummaries = append(transcriptSummaries, map[string]interface{}{
+							"transcriptId": t.ID,
+							"meetingId":    t.MeetingID,
+							"status":       t.Status,
+						})
+					}
+					response["transcripts"] = transcriptSummaries
+				} else if tErr != nil {
+					log.Printf("Enrichment: failed to list transcripts for meeting %s: %v", result.ID, tErr)
+				}
+			}
+
+			data, _ := json.MarshalIndent(response, "", "  ")
 			return mcp.NewToolResultText(string(data)), nil
 		},
 	)

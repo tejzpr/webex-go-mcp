@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	webex "github.com/tejzpr/webex-go-sdk/v2"
@@ -15,7 +16,8 @@ func RegisterTranscriptTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_transcripts_list
 	s.AddTool(
 		mcp.NewTool("webex_transcripts_list",
-			mcp.WithDescription("List Webex meeting transcripts. Transcripts are AI-powered text records of meetings. If 'from' and 'to' are not specified (and no 'meetingId' is provided), defaults to the last 30 days. The date range between 'from' and 'to' must be within 30 days."),
+			mcp.WithDescription("List Webex meeting transcripts. Transcripts are AI-powered text records of meetings. If 'from' and 'to' are not specified (and no 'meetingId' is provided), defaults to the last 30 days. The date range between 'from' and 'to' must be within 30 days.\n"+
+				"Response is enriched: each transcript includes the meeting title and a preview of the first 3 spoken snippets (who said what), giving enough context to understand the discussion without downloading the full transcript."),
 			mcp.WithString("meetingId", mcp.Description("Filter by meeting ID")),
 			mcp.WithString("hostEmail", mcp.Description("Filter by host email")),
 			mcp.WithString("siteUrl", mcp.Description("Filter by Webex site URL")),
@@ -50,7 +52,50 @@ func RegisterTranscriptTools(s ToolRegistrar, client *webex.WebexClient) {
 				return mcp.NewToolResultError(fmt.Sprintf("Failed to list transcripts: %v", err)), nil
 			}
 
-			data, _ := json.MarshalIndent(page.Items, "", "  ")
+			// Enrich each transcript with meeting title and snippet preview
+			enrichedTranscripts := make([]map[string]interface{}, 0, len(page.Items))
+			for _, t := range page.Items {
+				et := map[string]interface{}{
+					"transcript": t,
+				}
+
+				// Enrich: meeting title (meetingTopic is in transcript, but also fetch meeting for richer info)
+				if t.MeetingID != "" {
+					if meeting, mErr := client.Meetings().Get(t.MeetingID); mErr == nil {
+						et["meetingTitle"] = meeting.Title
+					} else {
+						log.Printf("Enrichment: failed to get meeting %s for transcript %s: %v", t.MeetingID, t.ID, mErr)
+						// Fall back to meetingTopic from the transcript itself
+						if t.MeetingTopic != "" {
+							et["meetingTitle"] = t.MeetingTopic
+						}
+					}
+				}
+
+				// Enrich: first 3 snippets as a preview
+				if snippetPage, sErr := client.Transcripts().ListSnippets(t.ID, &transcripts.SnippetListOptions{
+					Max: 3,
+				}); sErr == nil && len(snippetPage.Items) > 0 {
+					snippetPreviews := make([]map[string]interface{}, 0, len(snippetPage.Items))
+					for _, s := range snippetPage.Items {
+						preview := map[string]interface{}{
+							"personName": s.PersonName,
+							"text":       s.Text,
+						}
+						if s.StartTime != "" {
+							preview["startTime"] = s.StartTime
+						}
+						snippetPreviews = append(snippetPreviews, preview)
+					}
+					et["snippetPreview"] = snippetPreviews
+				} else if sErr != nil {
+					log.Printf("Enrichment: failed to list snippets for transcript %s: %v", t.ID, sErr)
+				}
+
+				enrichedTranscripts = append(enrichedTranscripts, et)
+			}
+
+			data, _ := json.MarshalIndent(enrichedTranscripts, "", "  ")
 			return mcp.NewToolResultText(string(data)), nil
 		},
 	)
