@@ -4,7 +4,7 @@ A Go-based STDIO [Model Context Protocol (MCP)](https://modelcontextprotocol.io/
 
 ## Features
 
-**33 MCP tools** across 7 Webex API resource categories:
+**34 MCP tools** across 7 Webex API resource categories:
 
 | Category | Tools | Operations |
 |---|---|---|
@@ -12,7 +12,7 @@ A Go-based STDIO [Model Context Protocol (MCP)](https://modelcontextprotocol.io/
 | **Rooms** | 5 | List, create, get, update, delete rooms/spaces |
 | **Teams** | 4 | List, create, get, update teams |
 | **Memberships** | 4 | List, create, update, delete room memberships |
-| **Meetings** | 5 | List, create, get, update, delete scheduled meetings |
+| **Meetings** | 6 | List, create, get, update, delete meetings; list participants |
 | **Transcripts** | 5 | List transcripts, download content, list/get/update snippets |
 | **Webhooks** | 5 | List, create, get, update, delete webhooks |
 
@@ -53,7 +53,7 @@ The `category:action` shorthand maps to the full tool name `webex_{category}_{ac
 - If `--include` is set, only the specified tools are registered.
 - If `--exclude` is set, all tools except the specified ones are registered.
 - If both are set, `--include` takes priority and `--exclude` is ignored.
-- If neither is set, all 33 tools are registered (default).
+- If neither is set, all 34 tools are registered (default).
 
 **Available categories and actions:**
 
@@ -63,7 +63,7 @@ The `category:action` shorthand maps to the full tool name `webex_{category}_{ac
 | `rooms` | `list`, `create`, `get`, `update`, `delete` |
 | `teams` | `list`, `create`, `get`, `update` |
 | `memberships` | `list`, `create`, `update`, `delete` |
-| `meetings` | `list`, `create`, `get`, `update`, `delete` |
+| `meetings` | `list`, `create`, `get`, `update`, `delete`, `list_participants` |
 | `transcripts` | `list`, `download`, `list_snippets`, `get_snippet`, `update_snippet` |
 | `webhooks` | `list`, `create`, `get`, `update`, `delete` |
 
@@ -71,7 +71,7 @@ The `category:action` shorthand maps to the full tool name `webex_{category}_{ac
 
 For convenience, two preset flags are available that automatically add a curated set of tools to the `--include` list:
 
-- **`--minimal`** -- All operations for messages, rooms, teams, meetings, and transcripts (excludes memberships and webhooks). **23 tools.**
+- **`--minimal`** -- All operations for messages, rooms, teams, meetings, and transcripts (excludes memberships and webhooks). **24 tools.**
 - **`--readonly-minimal`** -- Only read/list/get operations for messages, rooms, teams, meetings, and transcripts. No create, update, or delete. **12 tools.**
 
 These flags **merge** with `--include` -- they don't override it. For example, `--minimal --include "webhooks:list"` registers the minimal set plus `webhooks:list`. If both `--minimal` and `--readonly-minimal` are set, `--minimal` takes priority.
@@ -254,10 +254,11 @@ Add to your Cursor MCP configuration (`.cursor/mcp.json` in your project or `~/.
 ### Meetings
 
 - **`webex_meetings_list`** -- List meetings (filter by `meetingType`, `state`, `from`, `to`). Note: `meetingType` is required when `state` is used.
-- **`webex_meetings_create`** -- Schedule a meeting (`title`, `start`, `end` required)
+- **`webex_meetings_create`** -- Schedule a meeting with optional invitees (`title`, `start`, `end` required; `invitees` accepts comma-separated emails)
 - **`webex_meetings_get`** -- Get meeting details by ID
 - **`webex_meetings_update`** -- Update a meeting
 - **`webex_meetings_delete`** -- Cancel/delete a meeting
+- **`webex_meetings_list_participants`** -- List who actually attended a past meeting (join/leave times, host status, devices)
 
 ### Transcripts
 

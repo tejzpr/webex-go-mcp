@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	webex "github.com/tejzpr/webex-go-sdk/v2"
@@ -122,9 +123,11 @@ func RegisterMeetingTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_meetings_create
 	s.AddTool(
 		mcp.NewTool("webex_meetings_create",
-			mcp.WithDescription("Schedule a new Webex meeting. Creates a meeting that participants can join via the webLink in the response.\n"+
+			mcp.WithDescription("Schedule a new Webex meeting with optional invitees. Creates a meeting that participants can join via the webLink in the response.\n"+
 				"\n"+
-				"IMPORTANT: Always confirm the meeting details (title, time, timezone) with the user before creating.\n"+
+				"INVITEES: Pass a comma-separated list of email addresses to automatically invite people. They receive a Webex meeting invite. Example: 'alice@example.com,bob@example.com'\n"+
+				"\n"+
+				"IMPORTANT: Always confirm the meeting details (title, time, timezone, invitees) with the user before creating.\n"+
 				"\n"+
 				"TIPS:\n"+
 				"- Always specify a timezone if the user mentions one (e.g. 'America/New_York', 'Asia/Kolkata', 'Europe/London'). If no timezone is mentioned, ask the user or default to UTC.\n"+
@@ -133,6 +136,7 @@ func RegisterMeetingTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithString("title", mcp.Required(), mcp.Description("Title of the meeting (e.g. 'Weekly Team Sync', '1:1 with Alice').")),
 			mcp.WithString("start", mcp.Required(), mcp.Description("Start time in ISO 8601 format (e.g. '2026-02-06T14:00:00Z' for UTC, or '2026-02-06T14:00:00' if using timezone parameter). Always clarify the timezone with the user.")),
 			mcp.WithString("end", mcp.Required(), mcp.Description("End time in ISO 8601 format. Must be after start. Common durations: 30 min, 1 hour. Example: if start is 14:00, end for a 1-hour meeting is 15:00.")),
+			mcp.WithString("invitees", mcp.Description("Comma-separated email addresses to invite to the meeting (e.g. 'alice@example.com,bob@example.com,charlie@example.com'). Each person receives a Webex meeting invite.")),
 			mcp.WithString("timezone", mcp.Description("IANA timezone name (e.g. 'America/New_York', 'Asia/Kolkata', 'Europe/London', 'US/Pacific'). If omitted, times are treated as UTC. ALWAYS set this when the user mentions a timezone or location.")),
 			mcp.WithString("agenda", mcp.Description("Optional meeting agenda or description. Appears in the meeting invite.")),
 			mcp.WithString("password", mcp.Description("Optional meeting password. If omitted, Webex generates one automatically.")),
@@ -162,6 +166,21 @@ func RegisterMeetingTools(s ToolRegistrar, client *webex.WebexClient) {
 				Password:                 req.GetString("password", ""),
 				Recurrence:               req.GetString("recurrence", ""),
 				EnabledAutoRecordMeeting: req.GetBool("enabledAutoRecordMeeting", false),
+			}
+
+			// Parse invitees from comma-separated emails
+			if inviteesStr := req.GetString("invitees", ""); inviteesStr != "" {
+				emails := strings.Split(inviteesStr, ",")
+				invitees := make([]meetings.Invitee, 0, len(emails))
+				for _, email := range emails {
+					email = strings.TrimSpace(email)
+					if email != "" {
+						invitees = append(invitees, meetings.Invitee{Email: email})
+					}
+				}
+				if len(invitees) > 0 {
+					meeting.Invitees = invitees
+				}
 			}
 
 			result, err := client.Meetings().Create(meeting)
@@ -299,6 +318,45 @@ func RegisterMeetingTools(s ToolRegistrar, client *webex.WebexClient) {
 			}
 
 			return mcp.NewToolResultText("Meeting deleted successfully"), nil
+		},
+	)
+
+	// webex_meetings_list_participants
+	s.AddTool(
+		mcp.NewTool("webex_meetings_list_participants",
+			mcp.WithDescription("List participants who joined a Webex meeting. Shows who actually attended, when they joined/left, whether they were host/co-host, and their device info.\n"+
+				"\n"+
+				"USE THIS WHEN:\n"+
+				"- 'Who attended the meeting?' or 'Who was in the call?'\n"+
+				"- 'Did <person> join the meeting?'\n"+
+				"- 'How long was <person> in the meeting?'\n"+
+				"\n"+
+				"NOTE: This only works for meetings that have already started or ended (meetingType='meeting'). You need the meeting instance ID, not the series ID. Use webex_meetings_list with meetingType='meeting' to find past meeting instances.\n"+
+				"\n"+
+				"RESPONSE: Each participant includes displayName, email, joinedTime, leftTime, state (joined/left/end), host/coHost flags, and device info."),
+			mcp.WithString("meetingId", mcp.Required(), mcp.Description("The meeting instance ID (not the series ID). Get this from webex_meetings_list with meetingType='meeting'.")),
+			mcp.WithNumber("max", mcp.Description("Maximum number of participants to return. Default varies by API.")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			meetingID, err := req.RequireString("meetingId")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			opts := &meetings.ParticipantListOptions{
+				MeetingID: meetingID,
+			}
+			if v := req.GetInt("max", 0); v > 0 {
+				opts.Max = v
+			}
+
+			page, err := client.Meetings().ListParticipants(opts)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to list participants: %v", err)), nil
+			}
+
+			data, _ := json.MarshalIndent(page.Items, "", "  ")
+			return mcp.NewToolResultText(string(data)), nil
 		},
 	)
 }
