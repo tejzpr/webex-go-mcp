@@ -6,7 +6,7 @@ require (
 	github.com/mark3labs/mcp-go v0.43.2
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
-	github.com/tejzpr/webex-go-sdk/v2 v2.0.2
+	github.com/tejzpr/webex-go-sdk/v2 v2.0.3
 )
 
 require (

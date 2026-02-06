@@ -15,9 +15,9 @@ func RegisterMeetingTools(s ToolRegistrar, client *webex.WebexClient) {
 	// webex_meetings_list
 	s.AddTool(
 		mcp.NewTool("webex_meetings_list",
-			mcp.WithDescription("List Webex meetings. Can filter by date range, type, and state."),
-			mcp.WithString("meetingType", mcp.Description("Filter by type: 'meetingSeries', 'scheduledMeeting', or 'meeting'")),
-			mcp.WithString("state", mcp.Description("Filter by state: 'active', 'scheduled', 'ready', 'lobby', 'connected', 'started', 'ended', 'missed', 'expired'")),
+			mcp.WithDescription("List Webex meetings. Can filter by date range, type, and state. IMPORTANT: The Webex API requires 'meetingType' to be set whenever 'state' is used as a filter. Without 'meetingType', the API returns meeting series (recurring definitions) rather than actual instances. Use meetingType='meeting' with state='ended' and a from/to date range to list past meeting instances."),
+			mcp.WithString("meetingType", mcp.Description("Filter by type: 'meetingSeries', 'scheduledMeeting', or 'meeting'. Required when 'state' is specified.")),
+			mcp.WithString("state", mcp.Description("Filter by state: 'active', 'scheduled', 'ready', 'lobby', 'connected', 'started', 'ended', 'missed', 'expired'. Requires 'meetingType' to also be set.")),
 			mcp.WithString("scheduledType", mcp.Description("Filter by scheduled type: 'meeting', 'webinar', 'personalRoomMeeting'")),
 			mcp.WithString("from", mcp.Description("Start date/time filter (ISO 8601, e.g. '2026-01-01T00:00:00Z')")),
 			mcp.WithString("to", mcp.Description("End date/time filter (ISO 8601)")),

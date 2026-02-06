@@ -4,7 +4,7 @@ A Go-based STDIO [Model Context Protocol (MCP)](https://modelcontextprotocol.io/
 
 ## Features
 
-**31 MCP tools** across 7 Webex API resource categories:
+**32 MCP tools** across 7 Webex API resource categories:
 
 | Category | Tools | Operations |
 |---|---|---|
@@ -13,7 +13,7 @@ A Go-based STDIO [Model Context Protocol (MCP)](https://modelcontextprotocol.io/
 | **Teams** | 4 | List, create, get, update teams |
 | **Memberships** | 4 | List, create, update, delete room memberships |
 | **Meetings** | 5 | List, create, get, update, delete scheduled meetings |
-| **Transcripts** | 4 | List transcripts, download content, list/get snippets |
+| **Transcripts** | 5 | List transcripts, download content, list/get/update snippets |
 | **Webhooks** | 5 | List, create, get, update, delete webhooks |
 
 ## Prerequisites
@@ -51,7 +51,7 @@ The `category:action` shorthand maps to the full tool name `webex_{category}_{ac
 - If `--include` is set, only the specified tools are registered.
 - If `--exclude` is set, all tools except the specified ones are registered.
 - If both are set, `--include` takes priority and `--exclude` is ignored.
-- If neither is set, all 31 tools are registered (default).
+- If neither is set, all 32 tools are registered (default).
 
 **Available categories and actions:**
 
@@ -62,7 +62,7 @@ The `category:action` shorthand maps to the full tool name `webex_{category}_{ac
 | `teams` | `list`, `create`, `get`, `update` |
 | `memberships` | `list`, `create`, `update`, `delete` |
 | `meetings` | `list`, `create`, `get`, `update`, `delete` |
-| `transcripts` | `list`, `download`, `list_snippets`, `get_snippet` |
+| `transcripts` | `list`, `download`, `list_snippets`, `get_snippet`, `update_snippet` |
 | `webhooks` | `list`, `create`, `get`, `update`, `delete` |
 
 **Examples:**
@@ -216,7 +216,7 @@ Add to your Cursor MCP configuration (`.cursor/mcp.json` in your project or `~/.
 
 ### Meetings
 
-- **`webex_meetings_list`** -- List meetings (filter by `meetingType`, `state`, `from`, `to`)
+- **`webex_meetings_list`** -- List meetings (filter by `meetingType`, `state`, `from`, `to`). Note: `meetingType` is required when `state` is used.
 - **`webex_meetings_create`** -- Schedule a meeting (`title`, `start`, `end` required)
 - **`webex_meetings_get`** -- Get meeting details by ID
 - **`webex_meetings_update`** -- Update a meeting
@@ -225,9 +225,10 @@ Add to your Cursor MCP configuration (`.cursor/mcp.json` in your project or `~/.
 ### Transcripts
 
 - **`webex_transcripts_list`** -- List meeting transcripts (filter by `meetingId`, `hostEmail`, date range)
-- **`webex_transcripts_download`** -- Download transcript content (`format`: `txt` or `vtt`)
+- **`webex_transcripts_download`** -- Download transcript content (`format`: `txt` or `vtt`, optional `meetingId` for best results)
 - **`webex_transcripts_list_snippets`** -- List spoken segments from a transcript
 - **`webex_transcripts_get_snippet`** -- Get a specific transcript snippet
+- **`webex_transcripts_update_snippet`** -- Update/correct a transcript snippet's text
 
 ### Webhooks
 
@@ -250,7 +251,7 @@ webex-go-mcp/
     teams.go          -- 4 team tools
     memberships.go    -- 4 membership tools
     meetings.go       -- 5 meeting tools
-    transcripts.go    -- 4 transcript tools
+    transcripts.go    -- 5 transcript tools
     webhooks.go       -- 5 webhook tools
 ```
 
