@@ -46,15 +46,44 @@ export WEBEX_ACCESS_TOKEN="your-token-here"
 ./webex-go-mcp
 ```
 
+### Run directly from Git (no build required)
+
+If you have Go installed, you can run the server directly from the repository without cloning or building. Go will fetch, compile, and execute in one step:
+
+```bash
+export WEBEX_ACCESS_TOKEN="your-token-here"
+go run github.com/tejzpr/webex-go-mcp@latest
+```
+
+This is especially convenient when configuring MCP clients like Cursor or Claude Desktop -- no pre-built binary needed.
+
 ### Claude Desktop
 
 Add to your Claude Desktop MCP configuration (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+
+**Using a pre-built binary:**
 
 ```json
 {
   "mcpServers": {
     "webex": {
       "command": "/path/to/webex-go-mcp",
+      "env": {
+        "WEBEX_ACCESS_TOKEN": "your-token-here"
+      }
+    }
+  }
+}
+```
+
+**Using `go run` directly from Git (no build step):**
+
+```json
+{
+  "mcpServers": {
+    "webex": {
+      "command": "go",
+      "args": ["run", "github.com/tejzpr/webex-go-mcp@latest"],
       "env": {
         "WEBEX_ACCESS_TOKEN": "your-token-here"
       }
@@ -67,6 +96,8 @@ Add to your Claude Desktop MCP configuration (`~/Library/Application Support/Cla
 
 Add to your Cursor MCP configuration (`.cursor/mcp.json` in your project or `~/.cursor/mcp.json` globally):
 
+**Using a pre-built binary:**
+
 ```json
 {
   "mcpServers": {
@@ -79,6 +110,24 @@ Add to your Cursor MCP configuration (`.cursor/mcp.json` in your project or `~/.
   }
 }
 ```
+
+**Using `go run` directly from Git (no build step):**
+
+```json
+{
+  "mcpServers": {
+    "webex": {
+      "command": "go",
+      "args": ["run", "github.com/tejzpr/webex-go-mcp@latest"],
+      "env": {
+        "WEBEX_ACCESS_TOKEN": "your-token-here"
+      }
+    }
+  }
+}
+```
+
+> **Note:** The `go run` approach requires Go to be installed and available on your `PATH`. The first run will download and compile the module (cached for subsequent runs). To update to the latest version, Go will re-fetch when `@latest` resolves to a newer release.
 
 ## Tool Reference
 

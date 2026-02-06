@@ -1,7 +1,7 @@
 package main
 
 import (
-	"webex-go-mcp/tools"
+	"github.com/tejzpr/webex-go-mcp/tools"
 
 	webex "github.com/tejzpr/webex-go-sdk/v2"
 

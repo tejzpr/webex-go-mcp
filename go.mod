@@ -1,4 +1,4 @@
-module webex-go-mcp
+module github.com/tejzpr/webex-go-mcp
 
 go 1.25.0
 
