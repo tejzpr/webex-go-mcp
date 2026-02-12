@@ -183,24 +183,25 @@ func RegisterMessageTools(s ToolRegistrar, client *webex.WebexClient) {
 				"\n"+
 				"DESTINATION: Same as webex_messages_create -- use toPersonEmail for DMs (email is enough, no lookup needed), or roomId for group spaces.\n"+
 				"\n"+
-				"TWO WAYS TO ATTACH A FILE (provide exactly one):\n"+
-				"1. fileUrl -- A publicly accessible URL (e.g. 'https://example.com/report.pdf'). Webex downloads the file from this URL.\n"+
-				"2. fileBase64 + fileName -- Base64-encoded file content with a filename. Use this to upload files directly (e.g. generated reports, images, CSVs).\n"+
+				"HOW TO ATTACH A FILE (provide exactly one approach):\n"+
+				"\n"+
+				"★ PREFERRED: fileBase64 + fileName -- Base64-encode the file content and provide a filename. This is the RECOMMENDED approach because it always works regardless of network visibility. Use this for generated reports, images, CSVs, or any file you have access to.\n"+
+				"\n"+
+				"⚠ FALLBACK ONLY: fileUrl -- A publicly accessible URL. Use this ONLY if you have a confirmed publicly reachable URL. Most URLs (internal, auth-gated, VPN-only, localhost) will FAIL because Webex servers must be able to download the file directly. When in doubt, always use fileBase64 + fileName instead.\n"+
 				"\n"+
 				"You can optionally include a text or markdown message along with the file.\n"+
 				"\n"+
 				"LIMITATIONS:\n"+
 				"- One file per message.\n"+
 				"- Max file size: 100MB.\n"+
-				"- For fileUrl: the URL must be publicly accessible (no auth-required URLs).\n"+
 				"\n"+
 				"IMPORTANT: Always confirm with the user before sending."),
 			mcp.WithString("roomId", mcp.Description("Room/space ID. Use when sending to a group space or when you already have a roomId.")),
 			mcp.WithString("toPersonId", mcp.Description("Person ID for a direct 1:1 message. Use only if you already have it.")),
 			mcp.WithString("toPersonEmail", mcp.Description("Email address for a direct 1:1 message (e.g. 'alice@example.com'). No lookup needed.")),
-			mcp.WithString("fileUrl", mcp.Description("A publicly accessible URL of the file to attach (e.g. 'https://example.com/report.pdf'). Webex downloads and attaches it. Use EITHER this OR fileBase64+fileName, not both.")),
-			mcp.WithString("fileBase64", mcp.Description("Base64-encoded file content. Use with 'fileName' to upload a file directly. Use EITHER this OR fileUrl, not both.")),
-			mcp.WithString("fileName", mcp.Description("The filename for the base64 upload (e.g. 'report.pdf', 'data.csv'). Required when using fileBase64.")),
+			mcp.WithString("fileBase64", mcp.Description("PREFERRED. Base64-encoded file content. Use this with 'fileName' to upload a file directly. This is the recommended default — it always works regardless of URL accessibility. Use EITHER this OR fileUrl, not both.")),
+			mcp.WithString("fileName", mcp.Description("The filename for the base64 upload (e.g. 'report.pdf', 'data.csv'). Required when using fileBase64 (the preferred method).")),
+			mcp.WithString("fileUrl", mcp.Description("FALLBACK ONLY. A publicly accessible URL of the file to attach. Use this ONLY if you have a confirmed publicly reachable URL (no auth, no VPN, no internal network). Most URLs will fail because Webex servers must download the file directly. Prefer fileBase64+fileName instead. Use EITHER this OR fileBase64, not both.")),
 			mcp.WithString("text", mcp.Description("Optional plain text message to include with the file.")),
 			mcp.WithString("markdown", mcp.Description("Optional rich text message (Webex markdown) to include with the file.")),
 		),
