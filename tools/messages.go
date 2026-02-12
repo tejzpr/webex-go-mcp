@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	webex "github.com/tejzpr/webex-go-sdk/v2"
@@ -185,9 +187,11 @@ func RegisterMessageTools(s ToolRegistrar, client *webex.WebexClient) {
 				"\n"+
 				"HOW TO ATTACH A FILE (provide exactly one approach):\n"+
 				"\n"+
-				"★ PREFERRED: fileBase64 + fileName -- Base64-encode the file content and provide a filename. This is the RECOMMENDED approach because it always works regardless of network visibility. Use this for generated reports, images, CSVs, or any file you have access to.\n"+
+				"★ BEST: localFilePath -- Absolute path to a file on the local filesystem. The MCP server reads the file and uploads it directly. Use this when the file already exists on disk (e.g. saved charts, downloaded files, generated reports). This avoids base64 encoding overhead and LLM output token limits.\n"+
 				"\n"+
-				"⚠ FALLBACK ONLY: fileUrl -- A publicly accessible URL. Use this ONLY if you have a confirmed publicly reachable URL. Most URLs (internal, auth-gated, VPN-only, localhost) will FAIL because Webex servers must be able to download the file directly. When in doubt, always use fileBase64 + fileName instead.\n"+
+				"★ PREFERRED: fileBase64 + fileName -- Base64-encode the file content and provide a filename. Use this for small generated content that isn't saved to disk. Be aware that very large base64 strings may be truncated by LLM output limits.\n"+
+				"\n"+
+				"⚠ FALLBACK ONLY: fileUrl -- A publicly accessible URL. Use this ONLY if you have a confirmed publicly reachable URL. Most URLs (internal, auth-gated, VPN-only, localhost) will FAIL because Webex servers must be able to download the file directly. When in doubt, use localFilePath or fileBase64 instead.\n"+
 				"\n"+
 				"You can optionally include a text or markdown message along with the file.\n"+
 				"\n"+
@@ -199,9 +203,10 @@ func RegisterMessageTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithString("roomId", mcp.Description("Room/space ID. Use when sending to a group space or when you already have a roomId.")),
 			mcp.WithString("toPersonId", mcp.Description("Person ID for a direct 1:1 message. Use only if you already have it.")),
 			mcp.WithString("toPersonEmail", mcp.Description("Email address for a direct 1:1 message (e.g. 'alice@example.com'). No lookup needed.")),
-			mcp.WithString("fileBase64", mcp.Description("PREFERRED. Base64-encoded file content. Use this with 'fileName' to upload a file directly. This is the recommended default — it always works regardless of URL accessibility. Use EITHER this OR fileUrl, not both.")),
-			mcp.WithString("fileName", mcp.Description("The filename for the base64 upload (e.g. 'report.pdf', 'data.csv'). Required when using fileBase64 (the preferred method).")),
-			mcp.WithString("fileUrl", mcp.Description("FALLBACK ONLY. A publicly accessible URL of the file to attach. Use this ONLY if you have a confirmed publicly reachable URL (no auth, no VPN, no internal network). Most URLs will fail because Webex servers must download the file directly. Prefer fileBase64+fileName instead. Use EITHER this OR fileBase64, not both.")),
+			mcp.WithString("localFilePath", mcp.Description("BEST option. Absolute path to a file on the local filesystem (e.g. '/tmp/report.pdf', '/Users/me/chart.png'). The MCP server reads the file and uploads it directly to Webex. Use this when the file exists on disk — it avoids base64 encoding and LLM token limits. Provide ONLY this, OR fileBase64+fileName, OR fileUrl.")),
+			mcp.WithString("fileBase64", mcp.Description("PREFERRED for in-memory content. Base64-encoded file content. Use with 'fileName' to upload directly. Works regardless of URL accessibility but large files may hit LLM output token limits — prefer localFilePath for large files. Provide ONLY this+fileName, OR localFilePath, OR fileUrl.")),
+			mcp.WithString("fileName", mcp.Description("Filename for the upload (e.g. 'report.pdf', 'data.csv'). Required when using fileBase64. Optional with localFilePath (defaults to the file's actual name).")),
+			mcp.WithString("fileUrl", mcp.Description("FALLBACK ONLY. A publicly accessible URL of the file to attach. Use ONLY if you have a confirmed publicly reachable URL (no auth, no VPN, no internal network). Most URLs will fail. Prefer localFilePath or fileBase64+fileName instead. Provide ONLY this, OR localFilePath, OR fileBase64+fileName.")),
 			mcp.WithString("text", mcp.Description("Optional plain text message to include with the file.")),
 			mcp.WithString("markdown", mcp.Description("Optional rich text message (Webex markdown) to include with the file.")),
 		),
@@ -218,21 +223,47 @@ func RegisterMessageTools(s ToolRegistrar, client *webex.WebexClient) {
 				return mcp.NewToolResultError("One of roomId, toPersonId, or toPersonEmail is required"), nil
 			}
 
-			fileURL := req.GetString("fileUrl", "")
+			localFilePath := req.GetString("localFilePath", "")
 			fileBase64 := req.GetString("fileBase64", "")
 			fileName := req.GetString("fileName", "")
+			fileURL := req.GetString("fileUrl", "")
 
-			if fileURL == "" && fileBase64 == "" {
-				return mcp.NewToolResultError("Either 'fileUrl' (public URL) or 'fileBase64' + 'fileName' (base64 data) is required"), nil
+			// Count how many file source approaches were provided
+			sourceCount := 0
+			if localFilePath != "" {
+				sourceCount++
 			}
-			if fileURL != "" && fileBase64 != "" {
-				return mcp.NewToolResultError("Provide either 'fileUrl' or 'fileBase64', not both"), nil
+			if fileBase64 != "" {
+				sourceCount++
+			}
+			if fileURL != "" {
+				sourceCount++
+			}
+
+			if sourceCount == 0 {
+				return mcp.NewToolResultError("One of 'localFilePath', 'fileBase64' + 'fileName', or 'fileUrl' is required"), nil
+			}
+			if sourceCount > 1 {
+				return mcp.NewToolResultError("Provide exactly one of 'localFilePath', 'fileBase64', or 'fileUrl' -- not multiple"), nil
 			}
 
 			var result *messages.Message
 			var err error
 
-			if fileBase64 != "" {
+			if localFilePath != "" {
+				// Local file upload: read from disk and send via multipart
+				fileBytes, readErr := os.ReadFile(localFilePath)
+				if readErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to read local file '%s': %v", localFilePath, readErr)), nil
+				}
+				if fileName == "" {
+					fileName = filepath.Base(localFilePath)
+				}
+				result, err = client.Messages().CreateWithAttachment(msg, &messages.FileUpload{
+					FileName:  fileName,
+					FileBytes: fileBytes,
+				})
+			} else if fileBase64 != "" {
 				// Base64 upload via multipart form
 				if fileName == "" {
 					return mcp.NewToolResultError("'fileName' is required when using 'fileBase64' (e.g. 'report.pdf')"), nil
