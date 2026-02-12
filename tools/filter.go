@@ -154,7 +154,7 @@ var (
 	// PresetMinimal includes all tools for messages, rooms, teams, meetings, and transcripts.
 	// Excludes memberships and webhooks.
 	PresetMinimal = []string{
-		"webex_messages_list", "webex_messages_create", "webex_messages_send_attachment", "webex_messages_get", "webex_messages_delete",
+		"webex_messages_list", "webex_messages_create", "webex_messages_send_attachment", "webex_messages_send_adaptive_card", "webex_messages_get", "webex_messages_delete",
 		"webex_rooms_list", "webex_rooms_create", "webex_rooms_get", "webex_rooms_update", "webex_rooms_delete",
 		"webex_teams_list", "webex_teams_create", "webex_teams_get", "webex_teams_update",
 		"webex_meetings_list", "webex_meetings_create", "webex_meetings_get", "webex_meetings_update", "webex_meetings_delete", "webex_meetings_list_participants",

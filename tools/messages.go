@@ -284,6 +284,66 @@ func RegisterMessageTools(s ToolRegistrar, client *webex.WebexClient) {
 		},
 	)
 
+	// webex_messages_send_adaptive_card
+	s.AddTool(
+		mcp.NewTool("webex_messages_send_adaptive_card",
+			mcp.WithDescription("Send an Adaptive Card message to a person or room in Webex.\n"+
+				"\n"+
+				"Adaptive Cards are rich, interactive UI cards that can contain text, images, buttons, inputs, and more. "+
+				"They are rendered natively in Webex clients.\n"+
+				"\n"+
+				"DESTINATION: Same as webex_messages_create -- use toPersonEmail for DMs (email is enough, no lookup needed), or roomId for group spaces.\n"+
+				"\n"+
+				"CARD FORMAT: Provide the card body as a JSON string in 'cardJson'. The JSON must follow the Adaptive Card schema "+
+				"(see https://adaptivecards.io/explorer/). At minimum it should have:\n"+
+				"  {\"type\": \"AdaptiveCard\", \"version\": \"1.3\", \"body\": [...]}\n"+
+				"\n"+
+				"EXAMPLES of body elements:\n"+
+				"- TextBlock: {\"type\": \"TextBlock\", \"text\": \"Hello!\", \"size\": \"large\", \"weight\": \"bolder\"}\n"+
+				"- Image: {\"type\": \"Image\", \"url\": \"https://example.com/img.png\"}\n"+
+				"- ColumnSet, FactSet, ActionSet, Input.Text, Action.Submit, etc.\n"+
+				"\n"+
+				"IMPORTANT: Always confirm with the user before sending."),
+			mcp.WithString("roomId", mcp.Description("Room/space ID. Use when sending to a group space or when you already have a roomId.")),
+			mcp.WithString("toPersonId", mcp.Description("Person ID for a direct 1:1 message. Use only if you already have it.")),
+			mcp.WithString("toPersonEmail", mcp.Description("Email address for a direct 1:1 message (e.g. 'alice@example.com'). No lookup needed.")),
+			mcp.WithString("cardJson", mcp.Required(), mcp.Description("The Adaptive Card body as a JSON string. Must be a valid Adaptive Card object with at least {\"type\": \"AdaptiveCard\", \"version\": \"1.3\", \"body\": [...]}. See https://adaptivecards.io/explorer/ for the full schema.")),
+			mcp.WithString("fallbackText", mcp.Description("Plain text fallback displayed on clients that cannot render Adaptive Cards. If omitted, defaults to 'Adaptive Card'.")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			msg := &messages.Message{
+				RoomID:        req.GetString("roomId", ""),
+				ToPersonID:    req.GetString("toPersonId", ""),
+				ToPersonEmail: req.GetString("toPersonEmail", ""),
+			}
+
+			if msg.RoomID == "" && msg.ToPersonID == "" && msg.ToPersonEmail == "" {
+				return mcp.NewToolResultError("One of roomId, toPersonId, or toPersonEmail is required"), nil
+			}
+
+			cardJSON, err := req.RequireString("cardJson")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			var cardBody interface{}
+			if err := json.Unmarshal([]byte(cardJSON), &cardBody); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Invalid cardJson: %v", err)), nil
+			}
+
+			card := messages.NewAdaptiveCard(cardBody)
+			fallbackText := req.GetString("fallbackText", "")
+
+			result, err := client.Messages().CreateWithAdaptiveCard(msg, card, fallbackText)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to send adaptive card: %v", err)), nil
+			}
+
+			data, _ := json.MarshalIndent(result, "", "  ")
+			return mcp.NewToolResultText(string(data)), nil
+		},
+	)
+
 	// webex_messages_get
 	s.AddTool(
 		mcp.NewTool("webex_messages_get",
