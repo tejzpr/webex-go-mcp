@@ -2,10 +2,13 @@ package tools
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"mime"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	webex "github.com/tejzpr/webex-go-sdk/v2"
@@ -298,9 +301,15 @@ func RegisterMessageTools(s ToolRegistrar, client *webex.WebexClient) {
 				"(see https://adaptivecards.io/explorer/). At minimum it should have:\n"+
 				"  {\"type\": \"AdaptiveCard\", \"version\": \"1.3\", \"body\": [...]}\n"+
 				"\n"+
+				"IMAGES AND MEDIA IN CARDS:\n"+
+				"For Image elements and any 'url' fields in the card, you can use:\n"+
+				"\u2605 BEST: Local file path (e.g. \"url\": \"/tmp/chart.png\") -- The MCP server automatically reads the file and converts it to an embedded base64 data URI. Use this for generated charts, saved images, etc.\n"+
+				"\u2605 OK: Public URL (e.g. \"url\": \"https://example.com/img.png\") -- Must be publicly accessible.\n"+
+				"\u2605 OK: data: URI (e.g. \"url\": \"data:image/png;base64,...\") -- Already embedded, passed through as-is.\n"+
+				"\n"+
 				"EXAMPLES of body elements:\n"+
 				"- TextBlock: {\"type\": \"TextBlock\", \"text\": \"Hello!\", \"size\": \"large\", \"weight\": \"bolder\"}\n"+
-				"- Image: {\"type\": \"Image\", \"url\": \"https://example.com/img.png\"}\n"+
+				"- Image: {\"type\": \"Image\", \"url\": \"/tmp/chart.png\"} (local path auto-converted)\n"+
 				"- ColumnSet, FactSet, ActionSet, Input.Text, Action.Submit, etc.\n"+
 				"\n"+
 				"IMPORTANT: Always confirm with the user before sending."),
@@ -329,6 +338,11 @@ func RegisterMessageTools(s ToolRegistrar, client *webex.WebexClient) {
 			var cardBody interface{}
 			if err := json.Unmarshal([]byte(cardJSON), &cardBody); err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("Invalid cardJson: %v", err)), nil
+			}
+
+			// Resolve any local file paths in url fields to base64 data URIs
+			if err := resolveLocalFileURLs(cardBody); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to resolve local file paths in card: %v", err)), nil
 			}
 
 			card := messages.NewAdaptiveCard(cardBody)
@@ -429,4 +443,77 @@ func RegisterMessageTools(s ToolRegistrar, client *webex.WebexClient) {
 			return mcp.NewToolResultText("Message deleted successfully"), nil
 		},
 	)
+}
+
+// resolveLocalFileURLs recursively walks a parsed JSON tree (from an Adaptive Card)
+// and replaces any "url" values that are local file paths with base64 data URIs.
+// Local paths start with "/" or "~/". HTTP(S) URLs and data: URIs are left as-is.
+func resolveLocalFileURLs(node interface{}) error {
+	switch v := node.(type) {
+	case map[string]interface{}:
+		// Check if this map has a "url" key with a local file path
+		if urlVal, ok := v["url"]; ok {
+			if urlStr, ok := urlVal.(string); ok {
+				resolved, err := maybeResolveLocalPath(urlStr)
+				if err != nil {
+					return err
+				}
+				v["url"] = resolved
+			}
+		}
+		// Recurse into all values
+		for _, val := range v {
+			if err := resolveLocalFileURLs(val); err != nil {
+				return err
+			}
+		}
+	case []interface{}:
+		for _, item := range v {
+			if err := resolveLocalFileURLs(item); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// maybeResolveLocalPath checks if a URL string is a local file path and, if so,
+// reads the file and returns a base64 data URI. Otherwise returns the original string.
+func maybeResolveLocalPath(urlStr string) (string, error) {
+	// Skip URLs, data URIs, and empty strings
+	if urlStr == "" ||
+		strings.HasPrefix(urlStr, "http://") ||
+		strings.HasPrefix(urlStr, "https://") ||
+		strings.HasPrefix(urlStr, "data:") {
+		return urlStr, nil
+	}
+
+	// Expand ~ to home directory
+	path := urlStr
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("cannot expand ~ in path %q: %w", urlStr, err)
+		}
+		path = filepath.Join(home, path[2:])
+	}
+
+	// Only treat absolute paths as local files
+	if !filepath.IsAbs(path) {
+		return urlStr, nil
+	}
+
+	fileBytes, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to read local file %q: %w", path, err)
+	}
+
+	// Infer MIME type from extension
+	mimeType := mime.TypeByExtension(filepath.Ext(path))
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	encoded := base64.StdEncoding.EncodeToString(fileBytes)
+	return fmt.Sprintf("data:%s;base64,%s", mimeType, encoded), nil
 }
