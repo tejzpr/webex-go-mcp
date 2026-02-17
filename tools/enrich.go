@@ -115,8 +115,8 @@ func makeAuthenticatedRequest(client *webex.WebexClient, method, url string) (*h
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", client.Core().AccessToken))
-	return client.Core().HttpClient.Do(req)
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", client.Core().GetAccessToken()))
+	return client.Core().GetHTTPClient().Do(req)
 }
 
 // resolveFileMetadata does a HEAD request on a Webex content URL to get filename, size, content-type.

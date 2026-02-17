@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tejzpr/webex-go-mcp/auth"
+	"github.com/tejzpr/webex-go-mcp/streaming"
 	"github.com/tejzpr/webex-go-mcp/tools"
 
 	"github.com/tejzpr/webex-go-sdk/v2/webexsdk"
@@ -17,7 +18,8 @@ import (
 )
 
 // registerTools creates the MCP server and registers all tool groups with the given resolver.
-func registerTools(resolver auth.ClientResolver, include, exclude string, minimal, readonlyMinimal bool) *server.MCPServer {
+// If mercuryMgr is non-nil, streaming tools (subscribe, unsubscribe, wait_for_message) are also registered.
+func registerTools(resolver auth.ClientResolver, include, exclude string, minimal, readonlyMinimal bool, mercuryMgr *streaming.MercuryManager) *server.MCPServer {
 	s := server.NewMCPServer(
 		"webex-mcp",
 		version,
@@ -52,12 +54,23 @@ func registerTools(resolver auth.ClientResolver, include, exclude string, minima
 	tools.RegisterTranscriptTools(registrar, resolver)
 	tools.RegisterWebhookTools(registrar, resolver)
 
+	// Register streaming tools only when MercuryManager is available (HTTP mode)
+	if mercuryMgr != nil {
+		tools.RegisterStreamingTools(registrar, resolver, mercuryMgr)
+	}
+
 	return s
 }
 
 // startSTDIOServer starts the MCP server in STDIO mode.
 func startSTDIOServer(resolver auth.ClientResolver, include, exclude string, minimal, readonlyMinimal bool) error {
-	s := registerTools(resolver, include, exclude, minimal, readonlyMinimal)
+	// Create MCPServer first, then wire up MercuryManager for streaming tools
+	s := registerTools(resolver, include, exclude, minimal, readonlyMinimal, nil)
+
+	// Create MercuryManager and register streaming tools (works in STDIO too)
+	mercuryMgr := streaming.NewMercuryManager(s)
+	tools.RegisterStreamingTools(s, resolver, mercuryMgr)
+
 	return server.ServeStdio(s)
 }
 
@@ -140,8 +153,15 @@ func startHTTPServer(cfg *HTTPServerConfig) error {
 	// Create the HTTP client resolver
 	resolver := auth.NewHTTPClientResolver()
 
-	// Register tools with the resolver
-	mcpServer := registerTools(resolver, cfg.Include, cfg.Exclude, cfg.Minimal, cfg.ReadonlyMinimal)
+	// Register tools with the resolver.
+	// MercuryManager needs the MCPServer ref, so we pass nil first, then register streaming tools after.
+	mcpServer := registerTools(resolver, cfg.Include, cfg.Exclude, cfg.Minimal, cfg.ReadonlyMinimal, nil)
+
+	// Create MercuryManager for streaming tools (needs MCPServer for notifications)
+	mercuryMgr := streaming.NewMercuryManager(mcpServer)
+
+	// Register streaming tools now that we have both the MCPServer and MercuryManager
+	tools.RegisterStreamingTools(mcpServer, resolver, mercuryMgr)
 
 	// Create the Streamable HTTP server with context propagation
 	// The auth middleware injects the Webex client into the HTTP request context,
