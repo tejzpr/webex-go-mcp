@@ -11,12 +11,12 @@ import (
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	webex "github.com/tejzpr/webex-go-sdk/v2"
+	"github.com/tejzpr/webex-go-mcp/auth"
 	"github.com/tejzpr/webex-go-sdk/v2/messages"
 )
 
 // RegisterMessageTools registers all message-related MCP tools.
-func RegisterMessageTools(s ToolRegistrar, client *webex.WebexClient) {
+func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver) {
 	// webex_messages_list
 	s.AddTool(
 		mcp.NewTool("webex_messages_list",
@@ -37,6 +37,11 @@ func RegisterMessageTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithNumber("max", mcp.Description("Maximum number of messages to return (default 20, max 1000). Start with a small number like 20 and paginate if you need more.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			roomID, err := req.RequireString("roomId")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -156,6 +161,11 @@ func RegisterMessageTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithString("markdown", mcp.Description("Rich text using Webex markdown (bold, italic, links, code blocks, lists). Use this when formatting is desired.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			msg := &messages.Message{
 				RoomID:        req.GetString("roomId", ""),
 				ToPersonID:    req.GetString("toPersonId", ""),
@@ -214,6 +224,11 @@ func RegisterMessageTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithString("markdown", mcp.Description("Optional rich text message (Webex markdown) to include with the file.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			msg := &messages.Message{
 				RoomID:        req.GetString("roomId", ""),
 				ToPersonID:    req.GetString("toPersonId", ""),
@@ -251,7 +266,6 @@ func RegisterMessageTools(s ToolRegistrar, client *webex.WebexClient) {
 			}
 
 			var result *messages.Message
-			var err error
 
 			if localFilePath != "" {
 				// Local file upload: read from disk and send via multipart
@@ -320,6 +334,11 @@ func RegisterMessageTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithString("fallbackText", mcp.Description("Plain text fallback displayed on clients that cannot render Adaptive Cards. If omitted, defaults to 'Adaptive Card'.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			msg := &messages.Message{
 				RoomID:        req.GetString("roomId", ""),
 				ToPersonID:    req.GetString("toPersonId", ""),
@@ -372,6 +391,11 @@ func RegisterMessageTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithString("messageId", mcp.Required(), mcp.Description("The ID of the message to retrieve. Get this from webex_messages_list results or from webhook notification data.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			messageID, err := req.RequireString("messageId")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -430,6 +454,11 @@ func RegisterMessageTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithString("messageId", mcp.Required(), mcp.Description("The ID of the message to delete. Get this from webex_messages_list or webex_messages_get results.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			messageID, err := req.RequireString("messageId")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil

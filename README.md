@@ -1,10 +1,17 @@
 # Webex Go MCP Server
 
-A Go-based STDIO [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that exposes Cisco Webex APIs as tools. This allows LLMs (like Claude) to interact with Webex -- sending messages, managing rooms, scheduling meetings, downloading transcripts, and more.
+A Go-based [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that exposes Cisco Webex APIs as tools. Supports both **STDIO** and **HTTP** transport modes. This allows LLMs (like Claude) to interact with Webex -- sending messages, managing rooms, scheduling meetings, downloading transcripts, and more.
 
 ## Features
 
-**34 MCP tools** across 7 Webex API resource categories:
+- **Two transport modes**: STDIO (single-user, access token) and HTTP (multi-user, OAuth 2.1)
+- **OAuth 2.1 Authorization Server**: In HTTP mode, acts as an MCP-compliant OAuth 2.1 authorization server, proxying Webex Integration OAuth (Authorization Code + PKCE)
+- **Dynamic Client Registration**: RFC 7591 support for MCP clients to register dynamically
+- **Opaque Bearer tokens**: Issues its own tokens to MCP clients; Webex tokens never exposed
+- **Transparent token refresh**: Automatically refreshes expired Webex tokens
+- **Multi-user support**: Each authenticated user gets their own Webex API context
+
+**35 MCP tools** across 7 Webex API resource categories:
 
 | Category | Tools | Operations |
 |---|---|---|
@@ -19,7 +26,8 @@ A Go-based STDIO [Model Context Protocol (MCP)](https://modelcontextprotocol.io/
 ## Prerequisites
 
 - Go 1.23 or later
-- A [Webex access token](https://developer.webex.com/docs/getting-your-personal-access-token)
+- **STDIO mode**: A [Webex access token](https://developer.webex.com/docs/getting-your-personal-access-token)
+- **HTTP mode**: A [Webex Integration](https://developer.webex.com/docs/integrations) (Client ID, Client Secret, Redirect URI)
 
 ## Build
 
@@ -31,15 +39,37 @@ go build -o webex-go-mcp .
 
 Configuration is loaded via environment variables and/or CLI flags. CLI flags take precedence over environment variables.
 
+### Common Options
+
 | Env Variable | CLI Flag | Required | Default | Description |
 |---|---|---|---|---|
-| `WEBEX_ACCESS_TOKEN` | `--access-token` | Yes | - | Webex API bearer token |
+| `WEBEX_MODE` | `--mode` | No | `stdio` | Server mode: `stdio` or `http` |
 | `WEBEX_BASE_URL` | `--base-url` | No | `https://webexapis.com/v1` | Webex API base URL |
 | `WEBEX_TIMEOUT` | `--timeout` | No | `30s` | HTTP request timeout |
-| `WEBEX_INCLUDE_TOOLS` | `--include` | No | - | Comma-separated list of tools to include (only these are registered) |
-| `WEBEX_EXCLUDE_TOOLS` | `--exclude` | No | - | Comma-separated list of tools to exclude (all others are registered) |
-| `WEBEX_MINIMAL` | `--minimal` | No | `false` | Enable minimal tool set (messages, rooms, teams, meetings, transcripts) |
-| `WEBEX_READONLY_MINIMAL` | `--readonly-minimal` | No | `false` | Enable readonly minimal tool set (read-only operations only) |
+| `WEBEX_INCLUDE_TOOLS` | `--include` | No | - | Comma-separated list of tools to include |
+| `WEBEX_EXCLUDE_TOOLS` | `--exclude` | No | - | Comma-separated list of tools to exclude |
+| `WEBEX_MINIMAL` | `--minimal` | No | `false` | Enable minimal tool set |
+| `WEBEX_READONLY_MINIMAL` | `--readonly-minimal` | No | `false` | Enable readonly minimal tool set |
+
+### STDIO Mode Options
+
+| Env Variable | CLI Flag | Required | Default | Description |
+|---|---|---|---|---|
+| `WEBEX_ACCESS_TOKEN` | `--access-token` | Yes (stdio) | - | Webex API bearer token |
+
+### HTTP Mode Options
+
+| Env Variable | CLI Flag | Required | Default | Description |
+|---|---|---|---|---|
+| `WEBEX_CLIENT_ID` | `--client-id` | Yes (http) | - | Webex Integration Client ID |
+| `WEBEX_CLIENT_SECRET` | `--client-secret` | Yes (http) | - | Webex Integration Client Secret |
+| `WEBEX_REDIRECT_URI` | `--redirect-uri` | Yes (http) | - | OAuth redirect URI registered with Webex |
+| `WEBEX_SERVER_URL` | `--server-url` | No | `http://host:port` | External base URL of this server |
+| `WEBEX_OAUTH_SCOPES` | `--oauth-scopes` | No | `spark:all` | Webex OAuth scopes (space-separated) |
+| `WEBEX_HOST` | `--host` | No | `localhost` | HTTP server bind host |
+| `WEBEX_PORT` | `--port` | No | `8080` | HTTP server port |
+| `WEBEX_TLS_CERT` | `--tls-cert` | No | - | Path to TLS certificate file |
+| `WEBEX_TLS_KEY` | `--tls-key` | No | - | Path to TLS key file |
 
 ### Tool Filtering
 
@@ -97,11 +127,72 @@ These flags **merge** with `--include` -- they don't override it. For example, `
 
 ## Usage
 
-### Run directly
+### STDIO Mode (default)
 
 ```bash
 export WEBEX_ACCESS_TOKEN="your-token-here"
 ./webex-go-mcp
+```
+
+### HTTP Mode
+
+```bash
+export WEBEX_CLIENT_ID="your-client-id"
+export WEBEX_CLIENT_SECRET="your-client-secret"
+export WEBEX_REDIRECT_URI="http://localhost:8080/callback"
+./webex-go-mcp --mode http --port 8080
+```
+
+#### Setting Up a Webex Integration (HTTP Mode)
+
+1. Go to [developer.webex.com](https://developer.webex.com) and sign in
+2. Navigate to **My Webex Apps** > **Create a New App** > **Integration**
+3. Fill in the required fields:
+   - **Redirect URI**: Set to `http://localhost:8080/callback` (or your server's `/callback` URL)
+   - **Scopes**: Select the scopes your tools need (e.g., `spark:all`)
+4. Note the **Client ID** and **Client Secret**
+5. Set them as environment variables or CLI flags
+
+#### HTTP Mode Endpoints
+
+| Endpoint | Method | Auth | Description |
+|---|---|---|---|
+| `/.well-known/oauth-protected-resource` | GET | No | RFC 9728 Protected Resource Metadata |
+| `/.well-known/oauth-authorization-server` | GET | No | RFC 8414 Authorization Server Metadata |
+| `/register` | POST | No | RFC 7591 Dynamic Client Registration |
+| `/authorize` | GET | No | OAuth authorization (redirects to Webex) |
+| `/callback` | GET | No | OAuth callback (from Webex) |
+| `/token` | POST | No | Token exchange (auth code → Bearer token) |
+| `/mcp` | POST | Bearer | MCP Streamable HTTP endpoint |
+
+#### OAuth Flow (HTTP Mode)
+
+```mermaid
+sequenceDiagram
+    participant Client as MCP Client
+    participant Server as Our Server
+    participant Webex as Webex
+
+    Client->>Server: POST /register
+    Server-->>Client: client_id
+
+    Client->>Server: GET /authorize
+    Server->>Webex: GET /v1/authorize
+    Server-->>Client: redirect to Webex
+
+    Note over Client,Webex: User consents in browser
+
+    Webex->>Server: GET /callback (auth code)
+    Server->>Webex: POST /v1/access_token
+    Webex-->>Server: Webex tokens
+    Server-->>Client: redirect with code
+
+    Client->>Server: POST /token (auth code)
+    Server-->>Client: opaque Bearer token
+
+    Client->>Server: POST /mcp (Bearer token)
+    Note over Server: Resolves Webex token from opaque token
+    Server-->>Client: tool results
 ```
 
 ### Run directly from Git (no build required)
@@ -280,22 +371,30 @@ Add to your Cursor MCP configuration (`.cursor/mcp.json` in your project or `~/.
 
 ```
 webex-go-mcp/
-  main.go       -- Cobra CLI + Viper config, creates Webex SDK client
-  server.go     -- MCP server setup, registers all tools, STDIO transport
+  main.go       -- Cobra CLI + Viper config, mode branching (STDIO/HTTP)
+  server.go     -- MCP server setup, STDIO + HTTP server startup
+  auth/
+    client_resolver.go  -- ClientResolver type (static for STDIO, context-based for HTTP)
+    discovery.go        -- RFC 9728 + RFC 8414 well-known metadata endpoints
+    middleware.go       -- Bearer token auth middleware, transparent token refresh
+    oauth.go            -- /authorize, /callback, /token (proxies Webex OAuth)
+    registration.go     -- RFC 7591 Dynamic Client Registration
+    store.go            -- In-memory token store, auth code store, pending auth state
   tools/
     filter.go         -- ToolRegistrar interface, tool include/exclude filtering
-    messages.go       -- 4 message tools
+    enrich.go         -- Response enrichment helpers (person names, room info, files)
+    messages.go       -- 5 message tools
     rooms.go          -- 5 room tools
     teams.go          -- 4 team tools
     memberships.go    -- 4 membership tools
-    meetings.go       -- 5 meeting tools
+    meetings.go       -- 6 meeting tools
     transcripts.go    -- 5 transcript tools
     webhooks.go       -- 5 webhook tools
 ```
 
 ## Dependencies
 
-- [mcp-go](https://github.com/mark3labs/mcp-go) -- MCP server framework
+- [mcp-go](https://github.com/mark3labs/mcp-go) -- MCP server framework (STDIO + Streamable HTTP)
 - [webex-go-sdk](https://github.com/tejzpr/webex-go-sdk) -- Webex API client
 - [cobra](https://github.com/spf13/cobra) -- CLI framework
 - [viper](https://github.com/spf13/viper) -- Configuration management

@@ -7,12 +7,12 @@ import (
 	"log"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	webex "github.com/tejzpr/webex-go-sdk/v2"
+	"github.com/tejzpr/webex-go-mcp/auth"
 	"github.com/tejzpr/webex-go-sdk/v2/transcripts"
 )
 
 // RegisterTranscriptTools registers all transcript-related MCP tools.
-func RegisterTranscriptTools(s ToolRegistrar, client *webex.WebexClient) {
+func RegisterTranscriptTools(s ToolRegistrar, resolver auth.ClientResolver) {
 	// webex_transcripts_list
 	s.AddTool(
 		mcp.NewTool("webex_transcripts_list",
@@ -39,6 +39,11 @@ func RegisterTranscriptTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithNumber("max", mcp.Description("Maximum number of transcripts to return.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			opts := &transcripts.ListOptions{}
 
 			if v := req.GetString("meetingId", ""); v != "" {
@@ -60,9 +65,9 @@ func RegisterTranscriptTools(s ToolRegistrar, client *webex.WebexClient) {
 				opts.Max = v
 			}
 
-			page, err := client.Transcripts().List(opts)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("Failed to list transcripts: %v", err)), nil
+			page, lErr := client.Transcripts().List(opts)
+			if lErr != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to list transcripts: %v", lErr)), nil
 			}
 
 			// Enrich each transcript with meeting title and snippet preview
@@ -135,6 +140,11 @@ func RegisterTranscriptTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithString("format", mcp.Description("Download format: 'txt' (plain text, default) or 'vtt' (WebVTT with timestamps). Use 'txt' unless the user specifically needs timestamps.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			transcriptID, err := req.RequireString("transcriptId")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -170,6 +180,11 @@ func RegisterTranscriptTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithNumber("max", mcp.Description("Maximum number of snippets to return. Each snippet is one spoken utterance. A 30-minute meeting might have 50-200 snippets. Start with 20-50 for an overview.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			transcriptID, err := req.RequireString("transcriptId")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -200,6 +215,11 @@ func RegisterTranscriptTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithString("snippetId", mcp.Required(), mcp.Description("The specific snippet ID. Get this from webex_transcripts_list_snippets results.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			transcriptID, err := req.RequireString("transcriptId")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -234,6 +254,11 @@ func RegisterTranscriptTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithString("text", mcp.Required(), mcp.Description("The corrected text to replace the existing snippet text.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			transcriptID, err := req.RequireString("transcriptId")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil

@@ -6,14 +6,14 @@ import (
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	webex "github.com/tejzpr/webex-go-sdk/v2"
+	"github.com/tejzpr/webex-go-mcp/auth"
 	"github.com/tejzpr/webex-go-sdk/v2/memberships"
 	"github.com/tejzpr/webex-go-sdk/v2/messages"
 	"github.com/tejzpr/webex-go-sdk/v2/rooms"
 )
 
 // RegisterRoomTools registers all room/space-related MCP tools.
-func RegisterRoomTools(s ToolRegistrar, client *webex.WebexClient) {
+func RegisterRoomTools(s ToolRegistrar, resolver auth.ClientResolver) {
 	// webex_rooms_list
 	s.AddTool(
 		mcp.NewTool("webex_rooms_list",
@@ -40,6 +40,11 @@ func RegisterRoomTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithNumber("max", mcp.Description("Maximum number of rooms to return. Use a small number (10-20) when searching for a specific room, larger when listing all rooms.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			opts := &rooms.ListOptions{}
 
 			if v := req.GetString("teamId", ""); v != "" {
@@ -55,9 +60,9 @@ func RegisterRoomTools(s ToolRegistrar, client *webex.WebexClient) {
 				opts.Max = v
 			}
 
-			page, err := client.Rooms().List(opts)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("Failed to list rooms: %v", err)), nil
+			page, rErr := client.Rooms().List(opts)
+			if rErr != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to list rooms: %v", rErr)), nil
 			}
 
 			// Enrich each room
@@ -120,6 +125,11 @@ func RegisterRoomTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithString("teamId", mcp.Description("Optional team ID to associate this room with. The room will appear under that team. Get a teamId from webex_teams_list.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			title, err := req.RequireString("title")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -157,6 +167,11 @@ func RegisterRoomTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithString("roomId", mcp.Required(), mcp.Description("The ID of the room to retrieve. Get this from webex_rooms_list or from any API response that includes a roomId.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			roomID, err := req.RequireString("roomId")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -238,6 +253,11 @@ func RegisterRoomTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithString("title", mcp.Required(), mcp.Description("The new title/name for the room.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			roomID, err := req.RequireString("roomId")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -270,6 +290,11 @@ func RegisterRoomTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithString("roomId", mcp.Required(), mcp.Description("The ID of the room to permanently delete. Get this from webex_rooms_list.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			roomID, err := req.RequireString("roomId")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil

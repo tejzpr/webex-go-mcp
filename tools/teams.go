@@ -6,14 +6,14 @@ import (
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	webex "github.com/tejzpr/webex-go-sdk/v2"
+	"github.com/tejzpr/webex-go-mcp/auth"
 	"github.com/tejzpr/webex-go-sdk/v2/rooms"
 	"github.com/tejzpr/webex-go-sdk/v2/teammemberships"
 	"github.com/tejzpr/webex-go-sdk/v2/teams"
 )
 
 // RegisterTeamTools registers all team-related MCP tools.
-func RegisterTeamTools(s ToolRegistrar, client *webex.WebexClient) {
+func RegisterTeamTools(s ToolRegistrar, resolver auth.ClientResolver) {
 	// webex_teams_list
 	s.AddTool(
 		mcp.NewTool("webex_teams_list",
@@ -29,6 +29,11 @@ func RegisterTeamTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithNumber("max", mcp.Description("Maximum number of teams to return. Most users belong to a small number of teams.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			opts := &teams.ListOptions{}
 
 			if v := req.GetInt("max", 0); v > 0 {
@@ -87,6 +92,11 @@ func RegisterTeamTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithString("description", mcp.Description("Optional description of the team's purpose.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			name, err := req.RequireString("name")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -124,6 +134,11 @@ func RegisterTeamTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithString("teamId", mcp.Required(), mcp.Description("The ID of the team to retrieve. Get this from webex_teams_list.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			teamID, err := req.RequireString("teamId")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -182,6 +197,11 @@ func RegisterTeamTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithString("description", mcp.Description("Optional new description for the team.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			teamID, err := req.RequireString("teamId")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil

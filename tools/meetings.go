@@ -8,13 +8,13 @@ import (
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	webex "github.com/tejzpr/webex-go-sdk/v2"
+	"github.com/tejzpr/webex-go-mcp/auth"
 	"github.com/tejzpr/webex-go-sdk/v2/meetings"
 	"github.com/tejzpr/webex-go-sdk/v2/transcripts"
 )
 
 // RegisterMeetingTools registers all meeting-related MCP tools.
-func RegisterMeetingTools(s ToolRegistrar, client *webex.WebexClient) {
+func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 	// webex_meetings_list
 	s.AddTool(
 		mcp.NewTool("webex_meetings_list",
@@ -54,6 +54,11 @@ func RegisterMeetingTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithNumber("max", mcp.Description("Maximum number of meetings to return. Default varies by Webex API. Use 10-20 for searching, higher for comprehensive listing.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			opts := &meetings.ListOptions{}
 
 			if v := req.GetString("meetingType", ""); v != "" {
@@ -81,9 +86,9 @@ func RegisterMeetingTools(s ToolRegistrar, client *webex.WebexClient) {
 				opts.Max = v
 			}
 
-			page, err := client.Meetings().List(opts)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("Failed to list meetings: %v", err)), nil
+			page, lErr := client.Meetings().List(opts)
+			if lErr != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to list meetings: %v", lErr)), nil
 			}
 
 			// Enrich each meeting with transcript info if hasTranscription
@@ -144,6 +149,11 @@ func RegisterMeetingTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithBoolean("enabledAutoRecordMeeting", mcp.Description("Set to true to automatically record the meeting when it starts. Default: false.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			title, err := req.RequireString("title")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -207,6 +217,11 @@ func RegisterMeetingTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithString("meetingId", mcp.Required(), mcp.Description("The ID of the meeting to retrieve. Get this from webex_meetings_list results.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			meetingID, err := req.RequireString("meetingId")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -270,6 +285,11 @@ func RegisterMeetingTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithString("password", mcp.Description("New meeting password.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			meetingID, err := req.RequireString("meetingId")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -307,6 +327,11 @@ func RegisterMeetingTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithString("meetingId", mcp.Required(), mcp.Description("The ID of the meeting to cancel/delete. Get this from webex_meetings_list. For recurring meetings: series ID cancels all, specific occurrence ID cancels just that one.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			meetingID, err := req.RequireString("meetingId")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -338,6 +363,11 @@ func RegisterMeetingTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithNumber("max", mcp.Description("Maximum number of participants to return. Default varies by API.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			meetingID, err := req.RequireString("meetingId")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil

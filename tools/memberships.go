@@ -6,12 +6,12 @@ import (
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	webex "github.com/tejzpr/webex-go-sdk/v2"
+	"github.com/tejzpr/webex-go-mcp/auth"
 	"github.com/tejzpr/webex-go-sdk/v2/memberships"
 )
 
 // RegisterMembershipTools registers all membership-related MCP tools.
-func RegisterMembershipTools(s ToolRegistrar, client *webex.WebexClient) {
+func RegisterMembershipTools(s ToolRegistrar, resolver auth.ClientResolver) {
 	// webex_memberships_list
 	s.AddTool(
 		mcp.NewTool("webex_memberships_list",
@@ -31,6 +31,11 @@ func RegisterMembershipTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithNumber("max", mcp.Description("Maximum number of memberships to return.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			opts := &memberships.ListOptions{}
 
 			roomID := req.GetString("roomId", "")
@@ -47,9 +52,9 @@ func RegisterMembershipTools(s ToolRegistrar, client *webex.WebexClient) {
 				opts.Max = v
 			}
 
-			page, err := client.Memberships().List(opts)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("Failed to list memberships: %v", err)), nil
+			page, lErr := client.Memberships().List(opts)
+			if lErr != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to list memberships: %v", lErr)), nil
 			}
 
 			// Build enriched response
@@ -83,6 +88,11 @@ func RegisterMembershipTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithBoolean("isModerator", mcp.Description("Set to true to make this person a moderator of the room. Moderators can manage membership and room settings. Default: false.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			roomID, err := req.RequireString("roomId")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -119,6 +129,11 @@ func RegisterMembershipTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithBoolean("isModerator", mcp.Required(), mcp.Description("Set to true to make this person a moderator, false to remove moderator status.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			membershipID, err := req.RequireString("membershipId")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -151,6 +166,11 @@ func RegisterMembershipTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithString("membershipId", mcp.Required(), mcp.Description("The ID of the membership to delete. This is NOT the person ID or room ID -- get it from webex_memberships_list.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			membershipID, err := req.RequireString("membershipId")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil

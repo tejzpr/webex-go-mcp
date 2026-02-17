@@ -6,12 +6,12 @@ import (
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	webex "github.com/tejzpr/webex-go-sdk/v2"
+	"github.com/tejzpr/webex-go-mcp/auth"
 	"github.com/tejzpr/webex-go-sdk/v2/webhooks"
 )
 
 // RegisterWebhookTools registers all webhook-related MCP tools.
-func RegisterWebhookTools(s ToolRegistrar, client *webex.WebexClient) {
+func RegisterWebhookTools(s ToolRegistrar, resolver auth.ClientResolver) {
 	// webex_webhooks_list
 	s.AddTool(
 		mcp.NewTool("webex_webhooks_list",
@@ -21,6 +21,11 @@ func RegisterWebhookTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithNumber("max", mcp.Description("Maximum number of webhooks to return.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			opts := &webhooks.ListOptions{}
 
 			if v := req.GetInt("max", 0); v > 0 {
@@ -61,6 +66,11 @@ func RegisterWebhookTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithString("secret", mcp.Description("Optional secret string. Webex uses it to sign the webhook payload (HMAC-SHA1 in X-Spark-Signature header) so your server can verify the request is authentic.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			name, err := req.RequireString("name")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -104,6 +114,11 @@ func RegisterWebhookTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithString("webhookId", mcp.Required(), mcp.Description("The ID of the webhook. Get this from webex_webhooks_list.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			webhookID, err := req.RequireString("webhookId")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -132,6 +147,11 @@ func RegisterWebhookTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithString("status", mcp.Description("Set to 'active' to enable or 'inactive' to disable the webhook without deleting it.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			webhookID, err := req.RequireString("webhookId")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -173,6 +193,11 @@ func RegisterWebhookTools(s ToolRegistrar, client *webex.WebexClient) {
 			mcp.WithString("webhookId", mcp.Required(), mcp.Description("The ID of the webhook to delete. Get this from webex_webhooks_list.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
 			webhookID, err := req.RequireString("webhookId")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
