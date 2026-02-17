@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -62,6 +63,7 @@ func NewHTTPClientResolver() ClientResolver {
 	return func(ctx context.Context) (*webex.WebexClient, error) {
 		client, ok := WebexClientFromContext(ctx)
 		if !ok || client == nil {
+			log.Printf("[Resolver] no authenticated Webex client found in context")
 			return nil, fmt.Errorf("no authenticated Webex client in context")
 		}
 		return client, nil

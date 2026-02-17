@@ -9,19 +9,19 @@ import (
 // AuthMiddleware validates Bearer tokens on MCP requests and injects
 // the corresponding Webex client into the request context.
 type AuthMiddleware struct {
-	store       *TokenStore
-	clientCache *ClientCache
+	store        *TokenStore
+	clientCache  *ClientCache
 	oauthHandler *OAuthHandler
-	serverURL   string
+	serverURL    string
 }
 
 // NewAuthMiddleware creates a new auth middleware.
 func NewAuthMiddleware(store *TokenStore, clientCache *ClientCache, oauthHandler *OAuthHandler, serverURL string) *AuthMiddleware {
 	return &AuthMiddleware{
-		store:       store,
-		clientCache: clientCache,
+		store:        store,
+		clientCache:  clientCache,
 		oauthHandler: oauthHandler,
-		serverURL:   serverURL,
+		serverURL:    serverURL,
 	}
 }
 
@@ -30,30 +30,38 @@ func (am *AuthMiddleware) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
+			log.Printf("[AuthMW] %s %s: no Authorization header", r.Method, r.URL.Path)
 			am.sendUnauthorized(w)
 			return
 		}
 
 		opaqueToken, ok := SplitBearerToken(authHeader)
 		if !ok {
+			log.Printf("[AuthMW] %s %s: malformed Authorization header", r.Method, r.URL.Path)
 			am.sendUnauthorized(w)
 			return
 		}
+
+		log.Printf("[AuthMW] %s %s: Bearer token=%s...", r.Method, r.URL.Path, truncateForLog(opaqueToken, 8))
 
 		// Look up the opaque token
 		record, ok := am.store.LookupToken(opaqueToken)
 		if !ok {
+			log.Printf("[AuthMW] %s %s: token NOT FOUND in store", r.Method, r.URL.Path)
 			am.sendUnauthorized(w)
 			return
 		}
 
+		log.Printf("[AuthMW] %s %s: token found, expires_at=%s", r.Method, r.URL.Path, record.ExpiresAt.Format(time.RFC3339))
+
 		// Check if the Webex access token is expired or near-expiry (5 min buffer)
 		webexAccessToken := record.WebexAccessToken
 		if time.Now().Add(5 * time.Minute).After(record.ExpiresAt) {
+			log.Printf("[AuthMW] %s %s: Webex token expired/near-expiry, refreshing", r.Method, r.URL.Path)
 			// Try to refresh
 			newToken, err := am.oauthHandler.RefreshWebexTokenForRecord(record)
 			if err != nil {
-				log.Printf("Failed to refresh Webex token for opaque token %s: %v", opaqueToken[:8], err)
+				log.Printf("[AuthMW] %s %s: FAILED to refresh Webex token: %v", r.Method, r.URL.Path, err)
 				am.sendUnauthorized(w)
 				return
 			}
@@ -65,10 +73,12 @@ func (am *AuthMiddleware) Wrap(next http.Handler) http.Handler {
 		// Get or create a Webex client for this token
 		client, err := am.clientCache.GetOrCreate(webexAccessToken)
 		if err != nil {
-			log.Printf("Failed to create Webex client: %v", err)
+			log.Printf("[AuthMW] %s %s: FAILED to create Webex client: %v", r.Method, r.URL.Path, err)
 			writeJSONError(w, http.StatusInternalServerError, "server_error", "Failed to create API client")
 			return
 		}
+
+		log.Printf("[AuthMW] %s %s: authenticated, passing to MCP handler", r.Method, r.URL.Path)
 
 		// Inject the client and token into the context
 		ctx := ContextWithWebexClient(r.Context(), client)

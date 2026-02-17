@@ -3,6 +3,7 @@ package auth
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -10,14 +11,14 @@ import (
 
 // RegisteredClient represents a dynamically registered OAuth client (RFC 7591).
 type RegisteredClient struct {
-	ClientID     string   `json:"client_id"`
-	ClientSecret string   `json:"client_secret,omitempty"`
-	RedirectURIs []string `json:"redirect_uris"`
-	ClientName   string   `json:"client_name,omitempty"`
-	TokenEndpointAuthMethod string `json:"token_endpoint_auth_method,omitempty"`
-	GrantTypes   []string `json:"grant_types,omitempty"`
-	ResponseTypes []string `json:"response_types,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
+	ClientID                string    `json:"client_id"`
+	ClientSecret            string    `json:"client_secret,omitempty"`
+	RedirectURIs            []string  `json:"redirect_uris"`
+	ClientName              string    `json:"client_name,omitempty"`
+	TokenEndpointAuthMethod string    `json:"token_endpoint_auth_method,omitempty"`
+	GrantTypes              []string  `json:"grant_types,omitempty"`
+	ResponseTypes           []string  `json:"response_types,omitempty"`
+	CreatedAt               time.Time `json:"created_at"`
 }
 
 // ClientRegistry manages dynamically registered OAuth clients.
@@ -63,14 +64,14 @@ func (cr *ClientRegistry) Register(req *RegistrationRequest) (*RegisteredClient,
 	}
 
 	client := &RegisteredClient{
-		ClientID:     clientID,
-		ClientSecret: clientSecret,
-		RedirectURIs: req.RedirectURIs,
-		ClientName:   req.ClientName,
+		ClientID:                clientID,
+		ClientSecret:            clientSecret,
+		RedirectURIs:            req.RedirectURIs,
+		ClientName:              req.ClientName,
 		TokenEndpointAuthMethod: authMethod,
-		GrantTypes:   grantTypes,
-		ResponseTypes: responseTypes,
-		CreatedAt:    time.Now(),
+		GrantTypes:              grantTypes,
+		ResponseTypes:           responseTypes,
+		CreatedAt:               time.Now(),
 	}
 
 	cr.mu.Lock()
@@ -143,11 +144,16 @@ func (cr *ClientRegistry) HandleRegister(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	log.Printf("[DCR] /register: client_name=%s redirect_uris=%v", req.ClientName, req.RedirectURIs)
+
 	client, err := cr.Register(&req)
 	if err != nil {
+		log.Printf("[DCR] /register: FAILED - %v", err)
 		writeJSONError(w, http.StatusInternalServerError, "server_error", err.Error())
 		return
 	}
+
+	log.Printf("[DCR] /register: SUCCESS - client_id=%s", client.ClientID)
 
 	resp := &RegistrationResponse{
 		ClientID:                client.ClientID,

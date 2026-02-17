@@ -74,6 +74,45 @@ type HTTPServerConfig struct {
 	ReadonlyMinimal bool
 }
 
+// requestLoggingMiddleware logs every incoming HTTP request for debugging.
+func requestLoggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("[HTTP] %s %s (from %s, Content-Type: %s, Auth: %s)",
+			r.Method, r.URL.String(), r.RemoteAddr,
+			r.Header.Get("Content-Type"),
+			truncateHeader(r.Header.Get("Authorization"), 20))
+		next.ServeHTTP(w, r)
+	})
+}
+
+// corsMiddleware adds CORS headers to all responses.
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Mcp-Session-Id")
+		w.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// truncateHeader truncates a header value for safe logging.
+func truncateHeader(value string, maxLen int) string {
+	if value == "" {
+		return "(none)"
+	}
+	if len(value) > maxLen {
+		return value[:maxLen] + "..."
+	}
+	return value
+}
+
 // startHTTPServer starts the MCP server in HTTP mode with OAuth 2.1 support.
 func startHTTPServer(cfg *HTTPServerConfig) error {
 	// Initialize auth components
@@ -117,13 +156,16 @@ func startHTTPServer(cfg *HTTPServerConfig) error {
 	// MCP endpoint (authenticated)
 	mux.Handle("/mcp", authMiddleware.Wrap(streamableServer))
 
+	// Wrap with logging and CORS
+	handler := requestLoggingMiddleware(corsMiddleware(mux))
+
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 
 	if cfg.TLSCert != "" && cfg.TLSKey != "" {
 		log.Printf("Starting Webex MCP Server v%s in HTTP mode (https://%s)", version, addr)
 		tlsServer := &http.Server{
 			Addr:    addr,
-			Handler: mux,
+			Handler: handler,
 			TLSConfig: &tls.Config{
 				MinVersion: tls.VersionTLS12,
 			},
@@ -132,5 +174,5 @@ func startHTTPServer(cfg *HTTPServerConfig) error {
 	}
 
 	log.Printf("Starting Webex MCP Server v%s in HTTP mode (http://%s)", version, addr)
-	return http.ListenAndServe(addr, mux)
+	return http.ListenAndServe(addr, handler)
 }

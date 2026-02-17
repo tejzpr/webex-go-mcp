@@ -59,6 +59,8 @@ func (oh *OAuthHandler) HandleAuthorize(w http.ResponseWriter, r *http.Request) 
 	codeChallenge := q.Get("code_challenge")
 	codeChallengeMethod := q.Get("code_challenge_method")
 
+	log.Printf("[OAuth] /authorize: client_id=%s redirect_uri=%s response_type=%s state=%s", clientID, redirectURI, responseType, clientState)
+
 	// Validate required params
 	if responseType != "code" {
 		writeJSONError(w, http.StatusBadRequest, "unsupported_response_type", "Only response_type=code is supported")
@@ -75,6 +77,7 @@ func (oh *OAuthHandler) HandleAuthorize(w http.ResponseWriter, r *http.Request) 
 
 	// Validate client registration
 	if !oh.registry.ValidateRedirectURI(clientID, redirectURI) {
+		log.Printf("[OAuth] /authorize: FAILED - unknown client_id=%s or redirect_uri=%s not registered", clientID, redirectURI)
 		writeJSONError(w, http.StatusBadRequest, "invalid_request", "Unknown client_id or redirect_uri not registered")
 		return
 	}
@@ -118,6 +121,7 @@ func (oh *OAuthHandler) HandleAuthorize(w http.ResponseWriter, r *http.Request) 
 	}
 
 	webexAuthURL := webexAuthorizeURL + "?" + webexParams.Encode()
+	log.Printf("[OAuth] /authorize: redirecting to Webex (state=%s)", internalState)
 	http.Redirect(w, r, webexAuthURL, http.StatusFound)
 }
 
@@ -133,6 +137,8 @@ func (oh *OAuthHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	webexCode := q.Get("code")
 	state := q.Get("state")
 	webexError := q.Get("error")
+
+	log.Printf("[OAuth] /callback: state=%s code_len=%d error=%s", state, len(webexCode), webexError)
 
 	if webexError != "" {
 		log.Printf("OAuth callback error from Webex: %s - %s", webexError, q.Get("error_description"))
@@ -153,12 +159,14 @@ func (oh *OAuthHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Exchange the Webex auth code for tokens (server-to-server)
+	log.Printf("[OAuth] /callback: exchanging Webex auth code for tokens (state=%s)", state)
 	webexTokens, err := oh.exchangeWebexCode(webexCode, pending.WebexCodeVerifier)
 	if err != nil {
-		log.Printf("Failed to exchange Webex auth code: %v", err)
+		log.Printf("[OAuth] /callback: FAILED to exchange Webex auth code: %v", err)
 		http.Error(w, "Failed to exchange authorization code with Webex", http.StatusInternalServerError)
 		return
 	}
+	log.Printf("[OAuth] /callback: Webex token exchange successful (expires_in=%d)", webexTokens.ExpiresIn)
 
 	// Generate our own auth code for the MCP client
 	ourCode, err := GenerateAuthCode()
@@ -189,6 +197,7 @@ func (oh *OAuthHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	clientRedirect.RawQuery = cq.Encode()
 
+	log.Printf("[OAuth] /callback: redirecting to client %s with code=%s...", pending.ClientRedirectURI, ourCode[:8])
 	http.Redirect(w, r, clientRedirect.String(), http.StatusFound)
 }
 
@@ -199,12 +208,45 @@ func (oh *OAuthHandler) HandleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := r.ParseForm(); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid_request", "Failed to parse request body")
-		return
+	contentType := r.Header.Get("Content-Type")
+	log.Printf("[OAuth] /token: Content-Type=%s", contentType)
+
+	// Support both application/x-www-form-urlencoded and application/json
+	if strings.Contains(contentType, "application/json") {
+		// Parse JSON body into form values
+		var jsonBody map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&jsonBody); err != nil {
+			log.Printf("[OAuth] /token: FAILED to parse JSON body: %v", err)
+			writeJSONError(w, http.StatusBadRequest, "invalid_request", "Failed to parse JSON request body")
+			return
+		}
+		// Convert to form values so the rest of the handler works uniformly
+		r.Form = make(map[string][]string)
+		for k, v := range jsonBody {
+			r.Form.Set(k, v)
+		}
+	} else {
+		if err := r.ParseForm(); err != nil {
+			log.Printf("[OAuth] /token: FAILED to parse form body: %v", err)
+			writeJSONError(w, http.StatusBadRequest, "invalid_request", "Failed to parse request body")
+			return
+		}
+	}
+
+	// Support client_secret_basic: extract client_id/client_secret from Basic auth header
+	if r.FormValue("client_id") == "" {
+		if basicClientID, basicClientSecret, ok := r.BasicAuth(); ok {
+			log.Printf("[OAuth] /token: extracted client_id from Basic auth header")
+			if r.Form == nil {
+				r.Form = make(map[string][]string)
+			}
+			r.Form.Set("client_id", basicClientID)
+			r.Form.Set("client_secret", basicClientSecret)
+		}
 	}
 
 	grantType := r.FormValue("grant_type")
+	log.Printf("[OAuth] /token: grant_type=%s client_id=%s", grantType, truncateForLog(r.FormValue("client_id"), 16))
 
 	switch grantType {
 	case "authorization_code":
@@ -223,7 +265,10 @@ func (oh *OAuthHandler) handleAuthCodeExchange(w http.ResponseWriter, r *http.Re
 	redirectURI := r.FormValue("redirect_uri")
 	codeVerifier := r.FormValue("code_verifier")
 
+	log.Printf("[OAuth] /token auth_code: client_id=%s code=%s... redirect_uri=%s", clientID, truncateForLog(code, 8), redirectURI)
+
 	if code == "" || clientID == "" {
+		log.Printf("[OAuth] /token auth_code: FAILED - missing code or client_id")
 		writeJSONError(w, http.StatusBadRequest, "invalid_request", "code and client_id are required")
 		return
 	}
@@ -231,18 +276,22 @@ func (oh *OAuthHandler) handleAuthCodeExchange(w http.ResponseWriter, r *http.Re
 	// Consume the auth code (one-time use)
 	record, ok := oh.store.ConsumeAuthCode(code)
 	if !ok {
+		log.Printf("[OAuth] /token auth_code: FAILED - invalid or expired code=%s...", truncateForLog(code, 8))
 		writeJSONError(w, http.StatusBadRequest, "invalid_grant", "Invalid or expired authorization code")
 		return
 	}
+	log.Printf("[OAuth] /token auth_code: code consumed, record client_id=%s", record.ClientID)
 
 	// Validate client_id matches
 	if record.ClientID != clientID {
+		log.Printf("[OAuth] /token auth_code: FAILED - client_id mismatch (expected=%s got=%s)", record.ClientID, clientID)
 		writeJSONError(w, http.StatusBadRequest, "invalid_grant", "client_id mismatch")
 		return
 	}
 
 	// Validate redirect_uri matches if provided
 	if redirectURI != "" && record.RedirectURI != redirectURI {
+		log.Printf("[OAuth] /token auth_code: FAILED - redirect_uri mismatch (expected=%s got=%s)", record.RedirectURI, redirectURI)
 		writeJSONError(w, http.StatusBadRequest, "invalid_grant", "redirect_uri mismatch")
 		return
 	}
@@ -269,6 +318,8 @@ func (oh *OAuthHandler) handleAuthCodeExchange(w http.ResponseWriter, r *http.Re
 		"token_type":   "Bearer",
 		"expires_in":   record.WebexExpiresIn,
 	}
+
+	log.Printf("[OAuth] /token auth_code: SUCCESS - issued opaque token=%s...", truncateForLog(opaqueToken, 8))
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
@@ -413,4 +464,15 @@ func SplitBearerToken(authHeader string) (string, bool) {
 		return "", false
 	}
 	return token, true
+}
+
+// truncateForLog safely truncates a string for logging purposes.
+func truncateForLog(s string, maxLen int) string {
+	if s == "" {
+		return "(empty)"
+	}
+	if len(s) > maxLen {
+		return s[:maxLen]
+	}
+	return s
 }
