@@ -19,7 +19,9 @@ require (
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/invopop/jsonschema v0.13.0 // indirect
+	github.com/lib/pq v1.11.2 // indirect
 	github.com/mailru/easyjson v0.9.1 // indirect
+	github.com/mattn/go-sqlite3 v1.14.34 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/sagikazarmark/locafero v0.12.0 // indirect
 	github.com/spf13/afero v1.15.0 // indirect

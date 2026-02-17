@@ -9,14 +9,14 @@ import (
 // AuthMiddleware validates Bearer tokens on MCP requests and injects
 // the corresponding Webex client into the request context.
 type AuthMiddleware struct {
-	store        *TokenStore
+	store        Store
 	clientCache  *ClientCache
 	oauthHandler *OAuthHandler
 	serverURL    string
 }
 
 // NewAuthMiddleware creates a new auth middleware.
-func NewAuthMiddleware(store *TokenStore, clientCache *ClientCache, oauthHandler *OAuthHandler, serverURL string) *AuthMiddleware {
+func NewAuthMiddleware(store Store, clientCache *ClientCache, oauthHandler *OAuthHandler, serverURL string) *AuthMiddleware {
 	return &AuthMiddleware{
 		store:        store,
 		clientCache:  clientCache,

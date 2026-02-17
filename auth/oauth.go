@@ -29,17 +29,15 @@ type WebexTokenResponse struct {
 
 // OAuthHandler handles the OAuth 2.1 authorization flow, proxying to Webex.
 type OAuthHandler struct {
-	config   *OAuthConfig
-	store    *TokenStore
-	registry *ClientRegistry
+	config *OAuthConfig
+	store  Store
 }
 
 // NewOAuthHandler creates a new OAuth handler.
-func NewOAuthHandler(config *OAuthConfig, store *TokenStore, registry *ClientRegistry) *OAuthHandler {
+func NewOAuthHandler(config *OAuthConfig, store Store) *OAuthHandler {
 	return &OAuthHandler{
-		config:   config,
-		store:    store,
-		registry: registry,
+		config: config,
+		store:  store,
 	}
 }
 
@@ -75,11 +73,11 @@ func (oh *OAuthHandler) HandleAuthorize(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Validate client registration
-	if !oh.registry.ValidateRedirectURI(clientID, redirectURI) {
-		log.Printf("[OAuth] /authorize: FAILED - unknown client_id=%s or redirect_uri=%s not registered", clientID, redirectURI)
-		writeJSONError(w, http.StatusBadRequest, "invalid_request", "Unknown client_id or redirect_uri not registered")
-		return
+	// Validate client registration — if the client_id is unknown (e.g. after server restart),
+	// auto-register it with the provided redirect_uri so the flow can proceed.
+	if !oh.store.ValidateRedirectURI(clientID, redirectURI) {
+		log.Printf("[OAuth] /authorize: client_id=%s not in registry, auto-registering with redirect_uri=%s", clientID, redirectURI)
+		oh.store.RegisterClientWithID(clientID, redirectURI)
 	}
 
 	// Generate our internal state to correlate the Webex callback

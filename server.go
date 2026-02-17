@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"log"
@@ -68,6 +69,7 @@ type HTTPServerConfig struct {
 	TLSKey          string
 	OAuthConfig     *auth.OAuthConfig
 	WebexSDKConfig  *webexsdk.Config
+	StoreConfig     auth.StoreConfig
 	Include         string
 	Exclude         string
 	Minimal         bool
@@ -115,19 +117,25 @@ func truncateHeader(value string, maxLen int) string {
 
 // startHTTPServer starts the MCP server in HTTP mode with OAuth 2.1 support.
 func startHTTPServer(cfg *HTTPServerConfig) error {
-	// Initialize auth components
-	tokenStore := auth.NewTokenStore()
-	clientRegistry := auth.NewClientRegistry()
+	// Initialize store
+	store, err := auth.NewStore(cfg.StoreConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create store: %w", err)
+	}
+	defer store.Close()
+
+	log.Printf("Using %s store", cfg.StoreConfig.Type)
+
 	clientCache := auth.NewClientCache(15*time.Minute, cfg.WebexSDKConfig)
 
 	// Create OAuth handler
-	oauthHandler := auth.NewOAuthHandler(cfg.OAuthConfig, tokenStore, clientRegistry)
+	oauthHandler := auth.NewOAuthHandler(cfg.OAuthConfig, store)
 
 	// Create discovery handler
 	discoveryHandler := auth.NewDiscoveryHandler(cfg.OAuthConfig)
 
 	// Create auth middleware
-	authMiddleware := auth.NewAuthMiddleware(tokenStore, clientCache, oauthHandler, cfg.OAuthConfig.ServerURL)
+	authMiddleware := auth.NewAuthMiddleware(store, clientCache, oauthHandler, cfg.OAuthConfig.ServerURL)
 
 	// Create the HTTP client resolver
 	resolver := auth.NewHTTPClientResolver()
@@ -135,8 +143,22 @@ func startHTTPServer(cfg *HTTPServerConfig) error {
 	// Register tools with the resolver
 	mcpServer := registerTools(resolver, cfg.Include, cfg.Exclude, cfg.Minimal, cfg.ReadonlyMinimal)
 
-	// Create the Streamable HTTP server
-	streamableServer := server.NewStreamableHTTPServer(mcpServer)
+	// Create the Streamable HTTP server with context propagation
+	// The auth middleware injects the Webex client into the HTTP request context,
+	// but mcp-go creates a new context for tool handlers. WithHTTPContextFunc
+	// bridges the two by copying our context values into the MCP context.
+	streamableServer := server.NewStreamableHTTPServer(mcpServer,
+		server.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
+			// Copy Webex client from HTTP request context to MCP tool handler context
+			if client, ok := auth.WebexClientFromContext(r.Context()); ok {
+				ctx = auth.ContextWithWebexClient(ctx, client)
+			}
+			if token, ok := auth.WebexTokenFromContext(r.Context()); ok {
+				ctx = auth.ContextWithWebexToken(ctx, token)
+			}
+			return ctx
+		}),
+	)
 
 	// Build the HTTP mux
 	mux := http.NewServeMux()
@@ -151,7 +173,7 @@ func startHTTPServer(cfg *HTTPServerConfig) error {
 	mux.HandleFunc("/token", oauthHandler.HandleToken)
 
 	// Dynamic Client Registration (unauthenticated)
-	mux.HandleFunc("/register", clientRegistry.HandleRegister)
+	mux.HandleFunc("/register", auth.HandleRegister(store))
 
 	// MCP endpoint (authenticated)
 	mux.Handle("/mcp", authMiddleware.Wrap(streamableServer))

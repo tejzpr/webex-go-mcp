@@ -46,6 +46,8 @@ func main() {
 	rootCmd.Flags().String("server-url", "", "External base URL of this server (env: WEBEX_SERVER_URL). Required for http mode. Example: http://localhost:8080")
 	rootCmd.Flags().String("tls-cert", "", "Path to TLS certificate file (env: WEBEX_TLS_CERT)")
 	rootCmd.Flags().String("tls-key", "", "Path to TLS key file (env: WEBEX_TLS_KEY)")
+	rootCmd.Flags().String("store", "memory", "Store backend: 'memory' (default), 'sqlite', or 'postgres' (env: WEBEX_STORE)")
+	rootCmd.Flags().String("store-dsn", "", "Store DSN for sqlite/postgres (env: WEBEX_STORE_DSN). SQLite: 'file:data.db', Postgres: 'postgres://user:pass@host:5432/db'")
 
 	// Bind flags to viper
 	_ = viper.BindPFlag("mode", rootCmd.Flags().Lookup("mode"))
@@ -65,6 +67,8 @@ func main() {
 	_ = viper.BindPFlag("server_url", rootCmd.Flags().Lookup("server-url"))
 	_ = viper.BindPFlag("tls_cert", rootCmd.Flags().Lookup("tls-cert"))
 	_ = viper.BindPFlag("tls_key", rootCmd.Flags().Lookup("tls-key"))
+	_ = viper.BindPFlag("store", rootCmd.Flags().Lookup("store"))
+	_ = viper.BindPFlag("store_dsn", rootCmd.Flags().Lookup("store-dsn"))
 
 	// Bind environment variables
 	viper.SetEnvPrefix("WEBEX")
@@ -85,6 +89,8 @@ func main() {
 	_ = viper.BindEnv("server_url", "WEBEX_SERVER_URL")
 	_ = viper.BindEnv("tls_cert", "WEBEX_TLS_CERT")
 	_ = viper.BindEnv("tls_key", "WEBEX_TLS_KEY")
+	_ = viper.BindEnv("store", "WEBEX_STORE")
+	_ = viper.BindEnv("store_dsn", "WEBEX_STORE_DSN")
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -147,6 +153,8 @@ func runHTTP(sdkConfig *webexsdk.Config, include, exclude string, minimal, reado
 	port := viper.GetInt("port")
 	tlsCert := viper.GetString("tls_cert")
 	tlsKey := viper.GetString("tls_key")
+	storeType := viper.GetString("store")
+	storeDSN := viper.GetString("store_dsn")
 
 	// Validate required HTTP mode config
 	if clientID == "" {
@@ -181,7 +189,11 @@ func runHTTP(sdkConfig *webexsdk.Config, include, exclude string, minimal, reado
 			RedirectURI:  redirectURI,
 			ServerURL:    serverURL,
 		},
-		WebexSDKConfig:  sdkConfig,
+		WebexSDKConfig: sdkConfig,
+		StoreConfig: auth.StoreConfig{
+			Type: storeType,
+			DSN:  storeDSN,
+		},
 		Include:         include,
 		Exclude:         exclude,
 		Minimal:         minimal,
