@@ -3,10 +3,12 @@ module github.com/tejzpr/webex-go-mcp
 go 1.25.0
 
 require (
-	github.com/mark3labs/mcp-go v0.43.2
+	github.com/WebexCommunity/webex-go-sdk/v2 v2.0.11
+	github.com/lib/pq v1.11.2
+	github.com/mark3labs/mcp-go v0.44.0
+	github.com/mattn/go-sqlite3 v1.14.34
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
-	github.com/tejzpr/webex-go-sdk/v2 v2.0.10
 )
 
 require (
@@ -14,14 +16,12 @@ require (
 	github.com/buger/jsonparser v1.1.1 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.3 // indirect
-	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
+	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/invopop/jsonschema v0.13.0 // indirect
-	github.com/lib/pq v1.11.2 // indirect
-	github.com/mailru/easyjson v0.9.1 // indirect
-	github.com/mattn/go-sqlite3 v1.14.34 // indirect
+	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/pion/datachannel v1.6.0 // indirect
 	github.com/pion/dtls/v3 v3.1.2 // indirect
@@ -39,7 +39,8 @@ require (
 	github.com/pion/transport/v4 v4.0.1 // indirect
 	github.com/pion/turn/v4 v4.1.4 // indirect
 	github.com/pion/webrtc/v4 v4.2.6 // indirect
-	github.com/sagikazarmark/locafero v0.12.0 // indirect
+	github.com/sagikazarmark/locafero v0.11.0 // indirect
+	github.com/sourcegraph/conc v0.3.1-0.20240121214520-5f936abd7ae8 // indirect
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
@@ -53,6 +54,5 @@ require (
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
 	golang.org/x/time v0.10.0 // indirect
-	gopkg.in/check.v1 v1.0.0-20190902080502-41f04d3bba15 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

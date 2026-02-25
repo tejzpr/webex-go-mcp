@@ -12,7 +12,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/tejzpr/webex-go-mcp/auth"
-	"github.com/tejzpr/webex-go-sdk/v2/messages"
+	"github.com/WebexCommunity/webex-go-sdk/v2/messages"
 )
 
 // RegisterMessageTools registers all message-related MCP tools.

@@ -7,9 +7,9 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/tejzpr/webex-go-mcp/auth"
-	"github.com/tejzpr/webex-go-sdk/v2/rooms"
-	"github.com/tejzpr/webex-go-sdk/v2/teammemberships"
-	"github.com/tejzpr/webex-go-sdk/v2/teams"
+	"github.com/WebexCommunity/webex-go-sdk/v2/rooms"
+	"github.com/WebexCommunity/webex-go-sdk/v2/teammemberships"
+	"github.com/WebexCommunity/webex-go-sdk/v2/teams"
 )
 
 // RegisterTeamTools registers all team-related MCP tools.

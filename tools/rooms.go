@@ -7,9 +7,9 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/tejzpr/webex-go-mcp/auth"
-	"github.com/tejzpr/webex-go-sdk/v2/memberships"
-	"github.com/tejzpr/webex-go-sdk/v2/messages"
-	"github.com/tejzpr/webex-go-sdk/v2/rooms"
+	"github.com/WebexCommunity/webex-go-sdk/v2/memberships"
+	"github.com/WebexCommunity/webex-go-sdk/v2/messages"
+	"github.com/WebexCommunity/webex-go-sdk/v2/rooms"
 )
 
 // RegisterRoomTools registers all room/space-related MCP tools.

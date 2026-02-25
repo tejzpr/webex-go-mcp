@@ -7,7 +7,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/tejzpr/webex-go-mcp/auth"
-	"github.com/tejzpr/webex-go-sdk/v2/memberships"
+	"github.com/WebexCommunity/webex-go-sdk/v2/memberships"
 )
 
 // RegisterMembershipTools registers all membership-related MCP tools.

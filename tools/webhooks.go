@@ -7,7 +7,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/tejzpr/webex-go-mcp/auth"
-	"github.com/tejzpr/webex-go-sdk/v2/webhooks"
+	"github.com/WebexCommunity/webex-go-sdk/v2/webhooks"
 )
 
 // RegisterWebhookTools registers all webhook-related MCP tools.

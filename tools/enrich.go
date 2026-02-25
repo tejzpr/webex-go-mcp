@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	webex "github.com/tejzpr/webex-go-sdk/v2"
+	webex "github.com/WebexCommunity/webex-go-sdk/v2"
 )
 
 // maxTextFileSize is the maximum size of a text file to include inline (100KB).

@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/tejzpr/webex-go-mcp/auth"
-	webex "github.com/tejzpr/webex-go-sdk/v2"
-	"github.com/tejzpr/webex-go-sdk/v2/webexsdk"
+	webex "github.com/WebexCommunity/webex-go-sdk/v2"
+	"github.com/WebexCommunity/webex-go-sdk/v2/webexsdk"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"

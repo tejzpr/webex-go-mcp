@@ -395,7 +395,7 @@ webex-go-mcp/
 ## Dependencies
 
 - [mcp-go](https://github.com/mark3labs/mcp-go) -- MCP server framework (STDIO + Streamable HTTP)
-- [webex-go-sdk](https://github.com/tejzpr/webex-go-sdk) -- Webex API client
+- [webex-go-sdk](https://github.com/WebexCommunity/webex-go-sdk) -- Webex API client
 - [cobra](https://github.com/spf13/cobra) -- CLI framework
 - [viper](https://github.com/spf13/viper) -- Configuration management
 

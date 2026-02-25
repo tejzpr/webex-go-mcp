@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	webex "github.com/tejzpr/webex-go-sdk/v2"
-	"github.com/tejzpr/webex-go-sdk/v2/conversation"
+	webex "github.com/WebexCommunity/webex-go-sdk/v2"
+	"github.com/WebexCommunity/webex-go-sdk/v2/conversation"
 
 	"github.com/mark3labs/mcp-go/server"
 )

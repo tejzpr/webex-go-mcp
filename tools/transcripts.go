@@ -8,7 +8,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/tejzpr/webex-go-mcp/auth"
-	"github.com/tejzpr/webex-go-sdk/v2/transcripts"
+	"github.com/WebexCommunity/webex-go-sdk/v2/transcripts"
 )
 
 // RegisterTranscriptTools registers all transcript-related MCP tools.

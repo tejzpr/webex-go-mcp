@@ -12,7 +12,7 @@ import (
 	"github.com/tejzpr/webex-go-mcp/streaming"
 	"github.com/tejzpr/webex-go-mcp/tools"
 
-	"github.com/tejzpr/webex-go-sdk/v2/webexsdk"
+	"github.com/WebexCommunity/webex-go-sdk/v2/webexsdk"
 
 	"github.com/mark3labs/mcp-go/server"
 )

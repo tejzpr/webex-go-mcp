@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	webex "github.com/tejzpr/webex-go-sdk/v2"
-	"github.com/tejzpr/webex-go-sdk/v2/webexsdk"
+	webex "github.com/WebexCommunity/webex-go-sdk/v2"
+	"github.com/WebexCommunity/webex-go-sdk/v2/webexsdk"
 )
 
 // ClientResolver resolves a *webex.WebexClient from the request context.
