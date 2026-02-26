@@ -1,5 +1,5 @@
-github.com/WebexCommunity/webex-go-sdk/v2 v2.0.12 h1:OLGgpKuiGN0P6T+CE/3ticA9FtzhOopKLcZtZdlIjvc=
-github.com/WebexCommunity/webex-go-sdk/v2 v2.0.12/go.mod h1:iZSOtjMq81NLYNaNOZWRfZYBBVr4Cohiv+5HZrCj1d8=
+github.com/WebexCommunity/webex-go-sdk/v2 v2.0.13 h1:3s9A2+bAutU1PUj6IrUGKnS8Er2xw4z+GS/GaNEpsqg=
+github.com/WebexCommunity/webex-go-sdk/v2 v2.0.13/go.mod h1:iZSOtjMq81NLYNaNOZWRfZYBBVr4Cohiv+5HZrCj1d8=
 github.com/bahlo/generic-list-go v0.2.0 h1:5sz/EEAK+ls5wF+NeqDpk5+iNdMDXrh3z3nPnH1Wvgk=
 github.com/bahlo/generic-list-go v0.2.0/go.mod h1:2KvAjgMlE5NNynlg/5iLrrCCZ2+5xWbdbCW3pNTGyYg=
 github.com/buger/jsonparser v1.1.1 h1:2PnMjfWD7wBILjqQbt530v576A/cAbQvEW9gGIpYMUs=
