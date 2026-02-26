@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/WebexCommunity/webex-go-sdk/v2/transcripts"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/tejzpr/webex-go-mcp/auth"
-	"github.com/WebexCommunity/webex-go-sdk/v2/transcripts"
 )
 
 // RegisterTranscriptTools registers all transcript-related MCP tools.
@@ -34,8 +34,8 @@ func RegisterTranscriptTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			mcp.WithString("meetingId", mcp.Description("Filter to transcripts for a specific meeting. Get the meetingId from webex_meetings_list (look for meetings where hasTranscription=true) or from webex_meetings_get.")),
 			mcp.WithString("hostEmail", mcp.Description("Filter to transcripts from meetings hosted by this email address.")),
 			mcp.WithString("siteUrl", mcp.Description("Filter by Webex site URL. Usually not needed unless the user has multiple Webex sites.")),
-			mcp.WithString("from", mcp.Description("Start of date range (ISO 8601, e.g. '2026-01-01T00:00:00Z'). Defaults to 30 days ago. The from-to range must be within 30 days.")),
-			mcp.WithString("to", mcp.Description("End of date range (ISO 8601, e.g. '2026-02-06T23:59:59Z'). Defaults to now. The from-to range must be within 30 days.")),
+			mcp.WithString("from", mcp.Description("Start of date range (UTC format: '2026-01-01T00:00:00Z'). Defaults to 30 days ago. The from-to range must be within 30 days.")),
+			mcp.WithString("to", mcp.Description("End of date range (UTC format: '2026-02-06T23:59:59Z'). Defaults to now. The from-to range must be within 30 days.")),
 			mcp.WithNumber("max", mcp.Description("Maximum number of transcripts to return.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -56,9 +56,15 @@ func RegisterTranscriptTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				opts.SiteURL = v
 			}
 			if v := req.GetString("from", ""); v != "" {
+				if err := validateISO8601(v, "from"); err != nil {
+					return mcp.NewToolResultError(err.Error()), nil
+				}
 				opts.From = v
 			}
 			if v := req.GetString("to", ""); v != "" {
+				if err := validateISO8601(v, "to"); err != nil {
+					return mcp.NewToolResultError(err.Error()), nil
+				}
 				opts.To = v
 			}
 			if v := req.GetInt("max", 0); v > 0 {

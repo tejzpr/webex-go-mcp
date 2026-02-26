@@ -5,13 +5,30 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
+	"time"
 
-	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/tejzpr/webex-go-mcp/auth"
 	"github.com/WebexCommunity/webex-go-sdk/v2/meetings"
 	"github.com/WebexCommunity/webex-go-sdk/v2/transcripts"
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/tejzpr/webex-go-mcp/auth"
 )
+
+// validateISO8601 validates UTC date strings in format YYYY-MM-DDTHH:MM:SSZ
+func validateISO8601(dateStr, fieldName string) error {
+	// Only accept UTC format: 2026-01-01T00:00:00Z
+	pattern := `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$`
+
+	if matched, _ := regexp.MatchString(pattern, dateStr); matched {
+		// Try to parse it to ensure it's a valid date
+		if _, err := time.Parse(time.RFC3339, dateStr); err == nil {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("invalid %s format: must be UTC format 'YYYY-MM-DDTHH:MM:SSZ' (e.g., '2026-01-01T00:00:00Z')", fieldName)
+}
 
 // RegisterMeetingTools registers all meeting-related MCP tools.
 func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
@@ -47,11 +64,12 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				"Common values: 'scheduled' (upcoming), 'ended' (finished, use with meetingType='meeting'), 'active' (in progress), 'missed' (not attended).\n"+
 				"All values: 'active', 'scheduled', 'ready', 'lobby', 'connected', 'started', 'ended', 'missed', 'expired'.")),
 			mcp.WithString("scheduledType", mcp.Description("Filter by the type of scheduled event: 'meeting' (standard meeting), 'webinar' (Webex webinar), 'personalRoomMeeting' (personal room). Usually not needed.")),
-			mcp.WithString("from", mcp.Description("Start of time window (ISO 8601, e.g. '2026-02-06T00:00:00Z'). Use with 'to' to define a date range. For today's meetings, use today's date at 00:00:00.")),
-			mcp.WithString("to", mcp.Description("End of time window (ISO 8601, e.g. '2026-02-06T23:59:59Z'). Use with 'from' to define a date range. For today's meetings, use today's date at 23:59:59.")),
+			mcp.WithString("from", mcp.Description("Start of time window (UTC format: '2026-02-06T00:00:00Z'). Use with 'to' to define a date range. For today's meetings, use today's date at 00:00:00.")),
+			mcp.WithString("to", mcp.Description("End of time window (UTC format: '2026-02-06T23:59:59Z'). Use with 'from' to define a date range. For today's meetings, use today's date at 23:59:59.")),
 			mcp.WithString("hostEmail", mcp.Description("Filter by meeting host email. Only works for admin users -- regular users can only see their own meetings.")),
 			mcp.WithString("meetingNumber", mcp.Description("Filter by the Webex meeting number (the numeric code used to join). Useful when the user provides a specific meeting number.")),
 			mcp.WithNumber("max", mcp.Description("Maximum number of meetings to return. Default varies by Webex API. Use 10-20 for searching, higher for comprehensive listing.")),
+			mcp.WithBoolean("current", mcp.Description("Set to true to get only currently active meetings. Default: false (gets meetings in date range).")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			client, err := resolver(ctx)
@@ -71,9 +89,15 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				opts.ScheduledType = v
 			}
 			if v := req.GetString("from", ""); v != "" {
+				if err := validateISO8601(v, "from"); err != nil {
+					return mcp.NewToolResultError(err.Error()), nil
+				}
 				opts.From = v
 			}
 			if v := req.GetString("to", ""); v != "" {
+				if err := validateISO8601(v, "to"); err != nil {
+					return mcp.NewToolResultError(err.Error()), nil
+				}
 				opts.To = v
 			}
 			if v := req.GetString("hostEmail", ""); v != "" {
@@ -86,10 +110,18 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				opts.Max = v
 			}
 
+			// Handle current parameter - default to false to get meetings in date range
+			opts.Current = req.GetBool("current", false)
+
+			// Debug logging
+			log.Printf("[meetings] List options: %+v", opts)
+
 			page, lErr := client.Meetings().List(opts)
 			if lErr != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("Failed to list meetings: %v", lErr)), nil
 			}
+
+			log.Printf("[meetings] Found %d meetings", len(page.Items))
 
 			// Enrich each meeting with transcript info if hasTranscription
 			enrichedMeetings := make([]map[string]interface{}, 0, len(page.Items))
@@ -139,14 +171,18 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				"- For a 30-minute meeting at 2pm ET: start='2026-02-06T14:00:00', end='2026-02-06T14:30:00', timezone='America/New_York'\n"+
 				"- The response includes the webLink (join URL) and meetingNumber that participants need to join."),
 			mcp.WithString("title", mcp.Required(), mcp.Description("Title of the meeting (e.g. 'Weekly Team Sync', '1:1 with Alice').")),
-			mcp.WithString("start", mcp.Required(), mcp.Description("Start time in ISO 8601 format (e.g. '2026-02-06T14:00:00Z' for UTC, or '2026-02-06T14:00:00' if using timezone parameter). Always clarify the timezone with the user.")),
-			mcp.WithString("end", mcp.Required(), mcp.Description("End time in ISO 8601 format. Must be after start. Common durations: 30 min, 1 hour. Example: if start is 14:00, end for a 1-hour meeting is 15:00.")),
+			mcp.WithString("start", mcp.Required(), mcp.Description("Start time in UTC format (e.g. '2026-02-06T14:00:00Z'). Always clarify the timezone with the user and convert to UTC.")),
+			mcp.WithString("end", mcp.Required(), mcp.Description("End time in UTC format (e.g. '2026-02-06T15:00:00Z'). Must be after start. Common durations: 30 min, 1 hour.")),
 			mcp.WithString("invitees", mcp.Description("Comma-separated email addresses to invite to the meeting (e.g. 'alice@example.com,bob@example.com,charlie@example.com'). Each person receives a Webex meeting invite.")),
 			mcp.WithString("timezone", mcp.Description("IANA timezone name (e.g. 'America/New_York', 'Asia/Kolkata', 'Europe/London', 'US/Pacific'). If omitted, times are treated as UTC. ALWAYS set this when the user mentions a timezone or location.")),
 			mcp.WithString("agenda", mcp.Description("Optional meeting agenda or description. Appears in the meeting invite.")),
 			mcp.WithString("password", mcp.Description("Optional meeting password. If omitted, Webex generates one automatically.")),
 			mcp.WithString("recurrence", mcp.Description("Optional recurrence rule in RFC 2445 / iCal RRULE format. Examples: 'FREQ=WEEKLY;BYDAY=MO' (every Monday), 'FREQ=DAILY;COUNT=5' (next 5 days), 'FREQ=WEEKLY;INTERVAL=2;BYDAY=TU,TH' (every other Tue/Thu).")),
 			mcp.WithBoolean("enabledAutoRecordMeeting", mcp.Description("Set to true to automatically record the meeting when it starts. Default: false.")),
+			mcp.WithBoolean("enabledJoinBeforeHost", mcp.Description("Allow participants to join before the host arrives. Default: false.")),
+			mcp.WithNumber("joinBeforeHostMinutes", mcp.Description("Number of minutes participants can join before host. Required if enabledJoinBeforeHost is true.")),
+			mcp.WithBoolean("publicMeeting", mcp.Description("Make the meeting publicly accessible. Default: false.")),
+			mcp.WithBoolean("allowAnyUserToBeCoHost", mcp.Description("Allow any user to be co-host. Default: false.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			client, err := resolver(ctx)
@@ -162,8 +198,14 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
+			if err := validateISO8601(start, "start"); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			end, err := req.RequireString("end")
 			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if err := validateISO8601(end, "end"); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 
@@ -176,6 +218,10 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				Password:                 req.GetString("password", ""),
 				Recurrence:               req.GetString("recurrence", ""),
 				EnabledAutoRecordMeeting: req.GetBool("enabledAutoRecordMeeting", false),
+				EnabledJoinBeforeHost:    req.GetBool("enabledJoinBeforeHost", false),
+				JoinBeforeHostMinutes:    req.GetInt("joinBeforeHostMinutes", 0),
+				PublicMeeting:            req.GetBool("publicMeeting", false),
+				AllowAnyUserToBeCoHost:   req.GetBool("allowAnyUserToBeCoHost", false),
 			}
 
 			// Parse invitees from comma-separated emails
@@ -278,11 +324,16 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				"IMPORTANT: Confirm changes with the user before updating. Participants will be notified of the change."),
 			mcp.WithString("meetingId", mcp.Required(), mcp.Description("The ID of the meeting to update. Get this from webex_meetings_list. For recurring meetings, use the series ID to update all, or a specific occurrence ID to update just one.")),
 			mcp.WithString("title", mcp.Required(), mcp.Description("The meeting title (pass existing title if not changing).")),
-			mcp.WithString("start", mcp.Description("New start time (ISO 8601 format). Include timezone parameter if not using UTC.")),
-			mcp.WithString("end", mcp.Description("New end time (ISO 8601 format). Must be after start.")),
+			mcp.WithString("start", mcp.Description("New start time in UTC format (e.g. '2026-02-06T14:00:00Z').")),
+			mcp.WithString("end", mcp.Description("New end time in UTC format (e.g. '2026-02-06T15:00:00Z'). Must be after start.")),
 			mcp.WithString("timezone", mcp.Description("IANA timezone name (e.g. 'America/New_York'). Set when changing meeting time.")),
 			mcp.WithString("agenda", mcp.Description("Updated meeting agenda or description.")),
 			mcp.WithString("password", mcp.Description("New meeting password.")),
+			mcp.WithBoolean("enabledAutoRecordMeeting", mcp.Description("Enable/disable automatic recording.")),
+			mcp.WithBoolean("enabledJoinBeforeHost", mcp.Description("Enable/disable join before host.")),
+			mcp.WithNumber("joinBeforeHostMinutes", mcp.Description("Minutes participants can join before host.")),
+			mcp.WithBoolean("publicMeeting", mcp.Description("Make meeting public/private.")),
+			mcp.WithBoolean("allowAnyUserToBeCoHost", mcp.Description("Allow any user to be co-host.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			client, err := resolver(ctx)
@@ -300,12 +351,31 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			}
 
 			meeting := &meetings.Meeting{
-				Title:    title,
-				Start:    req.GetString("start", ""),
-				End:      req.GetString("end", ""),
-				Timezone: req.GetString("timezone", ""),
-				Agenda:   req.GetString("agenda", ""),
-				Password: req.GetString("password", ""),
+				Title:                    title,
+				Timezone:                 req.GetString("timezone", ""),
+				Agenda:                   req.GetString("agenda", ""),
+				Password:                 req.GetString("password", ""),
+				EnabledAutoRecordMeeting: req.GetBool("enabledAutoRecordMeeting", false),
+				EnabledJoinBeforeHost:    req.GetBool("enabledJoinBeforeHost", false),
+				JoinBeforeHostMinutes:    req.GetInt("joinBeforeHostMinutes", 0),
+				PublicMeeting:            req.GetBool("publicMeeting", false),
+				AllowAnyUserToBeCoHost:   req.GetBool("allowAnyUserToBeCoHost", false),
+			}
+
+			// Validate and set start time if provided
+			if start := req.GetString("start", ""); start != "" {
+				if err := validateISO8601(start, "start"); err != nil {
+					return mcp.NewToolResultError(err.Error()), nil
+				}
+				meeting.Start = start
+			}
+
+			// Validate and set end time if provided
+			if end := req.GetString("end", ""); end != "" {
+				if err := validateISO8601(end, "end"); err != nil {
+					return mcp.NewToolResultError(err.Error()), nil
+				}
+				meeting.End = end
 			}
 
 			result, err := client.Meetings().Update(meetingID, meeting)
@@ -386,6 +456,128 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			}
 
 			data, _ := json.MarshalIndent(page.Items, "", "  ")
+			return mcp.NewToolResultText(string(data)), nil
+		},
+	)
+
+	// webex_meetings_patch
+	s.AddTool(
+		mcp.NewTool("webex_meetings_patch",
+			mcp.WithDescription("Partially update a Webex meeting with only the specified fields. Useful for updating specific fields without affecting others.\n"+
+				"\n"+
+				"IMPORTANT: Confirm changes with the user before updating. Participants will be notified of the change."),
+			mcp.WithString("meetingId", mcp.Required(), mcp.Description("The ID of the meeting to patch. Get this from webex_meetings_list.")),
+			mcp.WithString("agenda", mcp.Description("Updated meeting agenda or description.")),
+			mcp.WithString("password", mcp.Description("New meeting password.")),
+			mcp.WithString("start", mcp.Description("New start time in UTC format (e.g. '2026-02-06T14:00:00Z').")),
+			mcp.WithString("end", mcp.Description("New end time in UTC format (e.g. '2026-02-06T15:00:00Z').")),
+			mcp.WithBoolean("enabledAutoRecordMeeting", mcp.Description("Enable/disable automatic recording.")),
+			mcp.WithBoolean("enabledJoinBeforeHost", mcp.Description("Enable/disable join before host.")),
+			mcp.WithNumber("joinBeforeHostMinutes", mcp.Description("Minutes participants can join before host.")),
+			mcp.WithBoolean("publicMeeting", mcp.Description("Make meeting public/private.")),
+			mcp.WithBoolean("allowAnyUserToBeCoHost", mcp.Description("Allow any user to be co-host.")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
+			meetingID, err := req.RequireString("meetingId")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			// Build patch data with only provided fields
+			patchData := make(map[string]interface{})
+
+			if v := req.GetString("agenda", ""); v != "" {
+				patchData["agenda"] = v
+			}
+			if v := req.GetString("password", ""); v != "" {
+				patchData["password"] = v
+			}
+			if v := req.GetString("start", ""); v != "" {
+				if err := validateISO8601(v, "start"); err != nil {
+					return mcp.NewToolResultError(err.Error()), nil
+				}
+				patchData["start"] = v
+			}
+			if v := req.GetString("end", ""); v != "" {
+				if err := validateISO8601(v, "end"); err != nil {
+					return mcp.NewToolResultError(err.Error()), nil
+				}
+				patchData["end"] = v
+			}
+
+			// For boolean fields, we need to check if they were explicitly provided
+			// Since GetBool always returns a value, we use the request's arguments map
+			if args := req.GetArguments(); args != nil {
+				if _, exists := args["enabledAutoRecordMeeting"]; exists {
+					patchData["enabledAutoRecordMeeting"] = req.GetBool("enabledAutoRecordMeeting", false)
+				}
+				if _, exists := args["enabledJoinBeforeHost"]; exists {
+					patchData["enabledJoinBeforeHost"] = req.GetBool("enabledJoinBeforeHost", false)
+				}
+				if _, exists := args["publicMeeting"]; exists {
+					patchData["publicMeeting"] = req.GetBool("publicMeeting", false)
+				}
+				if _, exists := args["allowAnyUserToBeCoHost"]; exists {
+					patchData["allowAnyUserToBeCoHost"] = req.GetBool("allowAnyUserToBeCoHost", false)
+				}
+			}
+
+			if v := req.GetInt("joinBeforeHostMinutes", -1); v >= 0 {
+				patchData["joinBeforeHostMinutes"] = v
+			}
+
+			if len(patchData) == 0 {
+				return mcp.NewToolResultError("No fields specified for patch"), nil
+			}
+
+			result, err := client.Meetings().Patch(meetingID, patchData)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to patch meeting: %v", err)), nil
+			}
+
+			data, _ := json.MarshalIndent(result, "", "  ")
+			return mcp.NewToolResultText(string(data)), nil
+		},
+	)
+
+	// webex_meetings_get_participant
+	s.AddTool(
+		mcp.NewTool("webex_meetings_get_participant",
+			mcp.WithDescription("Get details of a specific participant in a meeting."+
+				"\n"+
+				"USE THIS WHEN:\n"+
+				"- 'Get details for participant <ID> in meeting <meetingId>'\n"+
+				"\n"+
+				"NOTE: This only works for meetings that have already started or ended (meetingType='meeting')."),
+			mcp.WithString("participantId", mcp.Required(), mcp.Description("The participant ID to retrieve.")),
+			mcp.WithString("meetingId", mcp.Required(), mcp.Description("The meeting instance ID (not the series ID). Get this from webex_meetings_list with meetingType='meeting'.")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
+			participantID, err := req.RequireString("participantId")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			meetingID, err := req.RequireString("meetingId")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			participant, err := client.Meetings().GetParticipant(participantID, meetingID)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to get participant: %v", err)), nil
+			}
+
+			data, _ := json.MarshalIndent(participant, "", "  ")
 			return mcp.NewToolResultText(string(data)), nil
 		},
 	)
