@@ -56,16 +56,18 @@ func RegisterTranscriptTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				opts.SiteURL = v
 			}
 			if v := req.GetString("from", ""); v != "" {
-				if err := validateISO8601(v, "from"); err != nil {
+				convertedFrom, err := validateAndConvertISO8601(v, "from")
+				if err != nil {
 					return mcp.NewToolResultError(err.Error()), nil
 				}
-				opts.From = v
+				opts.From = convertedFrom
 			}
 			if v := req.GetString("to", ""); v != "" {
-				if err := validateISO8601(v, "to"); err != nil {
+				convertedTo, err := validateAndConvertISO8601(v, "to")
+				if err != nil {
 					return mcp.NewToolResultError(err.Error()), nil
 				}
-				opts.To = v
+				opts.To = convertedTo
 			}
 			if v := req.GetInt("max", 0); v > 0 {
 				opts.Max = v

@@ -15,19 +15,37 @@ import (
 	"github.com/tejzpr/webex-go-mcp/auth"
 )
 
-// validateISO8601 validates UTC date strings in format YYYY-MM-DDTHH:MM:SSZ
-func validateISO8601(dateStr, fieldName string) error {
-	// Only accept UTC format: 2026-01-01T00:00:00Z
-	pattern := `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$`
+// validateAndConvertISO8601 validates and converts UTC date strings
+// Accepts: YYYY-MM-DDTHH:MM:SSZ (e.g., '2026-01-01T00:00:00Z') and YYYY-MM-DDTHH:MM (e.g., '2026-01-01T00:00')
+// Returns: Converted date string in YYYY-MM-DDTHH:MM:SSZ format
+func validateAndConvertISO8601(dateStr, fieldName string) (string, error) {
+	// Pattern 1: Full UTC format: 2026-01-01T00:00:00Z
+	fullPattern := `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$`
 
-	if matched, _ := regexp.MatchString(pattern, dateStr); matched {
+	// Pattern 2: Short format: 2026-01-01T00:00
+	shortPattern := `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$`
+
+	if matched, _ := regexp.MatchString(fullPattern, dateStr); matched {
 		// Try to parse it to ensure it's a valid date
 		if _, err := time.Parse(time.RFC3339, dateStr); err == nil {
-			return nil
+			return dateStr, nil // Return as-is
 		}
+		return "", fmt.Errorf("invalid %s format: failed to parse UTC date", fieldName)
 	}
 
-	return fmt.Errorf("invalid %s format: must be UTC format 'YYYY-MM-DDTHH:MM:SSZ' (e.g., '2026-01-01T00:00:00Z')", fieldName)
+	if matched, _ := regexp.MatchString(shortPattern, dateStr); matched {
+		// Parse the short format and convert to full UTC format
+		parsedTime, err := time.Parse("2006-01-02T15:04", dateStr)
+		if err != nil {
+			return "", fmt.Errorf("invalid %s format: failed to parse date", fieldName)
+		}
+
+		// Convert to full UTC format
+		convertedStr := parsedTime.Format("2006-01-02T15:04:05Z")
+		return convertedStr, nil
+	}
+
+	return "", fmt.Errorf("invalid %s format: must be UTC format 'YYYY-MM-DDTHH:MM:SSZ' (e.g., '2026-01-01T00:00:00Z') or 'YYYY-MM-DDTHH:MM' (e.g., '2026-01-01T00:00')", fieldName)
 }
 
 // RegisterMeetingTools registers all meeting-related MCP tools.
@@ -89,16 +107,18 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				opts.ScheduledType = v
 			}
 			if v := req.GetString("from", ""); v != "" {
-				if err := validateISO8601(v, "from"); err != nil {
+				convertedFrom, err := validateAndConvertISO8601(v, "from")
+				if err != nil {
 					return mcp.NewToolResultError(err.Error()), nil
 				}
-				opts.From = v
+				opts.From = convertedFrom
 			}
 			if v := req.GetString("to", ""); v != "" {
-				if err := validateISO8601(v, "to"); err != nil {
+				convertedTo, err := validateAndConvertISO8601(v, "to")
+				if err != nil {
 					return mcp.NewToolResultError(err.Error()), nil
 				}
-				opts.To = v
+				opts.To = convertedTo
 			}
 			if v := req.GetString("hostEmail", ""); v != "" {
 				opts.HostEmail = v
@@ -246,21 +266,23 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			if err := validateISO8601(start, "start"); err != nil {
+			convertedStart, err := validateAndConvertISO8601(start, "start")
+			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			end, err := req.RequireString("end")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			if err := validateISO8601(end, "end"); err != nil {
+			convertedEnd, err := validateAndConvertISO8601(end, "end")
+			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 
 			meeting := &meetings.Meeting{
 				Title:                    title,
-				Start:                    start,
-				End:                      end,
+				Start:                    convertedStart,
+				End:                      convertedEnd,
 				Timezone:                 req.GetString("timezone", ""),
 				Agenda:                   req.GetString("agenda", ""),
 				Password:                 req.GetString("password", ""),
@@ -412,18 +434,20 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 
 			// Validate and set start time if provided
 			if start := req.GetString("start", ""); start != "" {
-				if err := validateISO8601(start, "start"); err != nil {
+				convertedStart, err := validateAndConvertISO8601(start, "start")
+				if err != nil {
 					return mcp.NewToolResultError(err.Error()), nil
 				}
-				meeting.Start = start
+				meeting.Start = convertedStart
 			}
 
 			// Validate and set end time if provided
 			if end := req.GetString("end", ""); end != "" {
-				if err := validateISO8601(end, "end"); err != nil {
+				convertedEnd, err := validateAndConvertISO8601(end, "end")
+				if err != nil {
 					return mcp.NewToolResultError(err.Error()), nil
 				}
-				meeting.End = end
+				meeting.End = convertedEnd
 			}
 
 			result, err := client.Meetings().Update(meetingID, meeting)
@@ -546,16 +570,18 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				patchData["password"] = v
 			}
 			if v := req.GetString("start", ""); v != "" {
-				if err := validateISO8601(v, "start"); err != nil {
+				convertedStart, err := validateAndConvertISO8601(v, "start")
+				if err != nil {
 					return mcp.NewToolResultError(err.Error()), nil
 				}
-				patchData["start"] = v
+				patchData["start"] = convertedStart
 			}
 			if v := req.GetString("end", ""); v != "" {
-				if err := validateISO8601(v, "end"); err != nil {
+				convertedEnd, err := validateAndConvertISO8601(v, "end")
+				if err != nil {
 					return mcp.NewToolResultError(err.Error()), nil
 				}
-				patchData["end"] = v
+				patchData["end"] = convertedEnd
 			}
 
 			// For boolean fields, we need to check if they were explicitly provided
