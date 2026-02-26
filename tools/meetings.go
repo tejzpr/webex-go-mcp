@@ -123,11 +123,16 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 
 			log.Printf("[meetings] Found %d meetings", len(page.Items))
 
-			// Enrich each meeting with transcript info if hasTranscription
+			// Enrich each meeting with additional information
 			enrichedMeetings := make([]map[string]interface{}, 0, len(page.Items))
 			for _, meeting := range page.Items {
 				em := map[string]interface{}{
 					"meeting": meeting,
+				}
+
+				// Enrich: host display name
+				if meeting.HostUserID != "" {
+					em["hostName"] = resolvePersonName(client, meeting.HostUserID)
 				}
 
 				// Enrich: transcripts for meetings that have them
@@ -147,6 +152,49 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 					} else if tErr != nil {
 						log.Printf("Enrichment: failed to list transcripts for meeting %s: %v", meeting.ID, tErr)
 					}
+				}
+
+				// Enrich: meeting link (webLink)
+				if meeting.WebLink != "" {
+					em["webLink"] = meeting.WebLink
+				}
+
+				// Enrich: meeting number
+				if meeting.MeetingNumber != "" {
+					em["meetingNumber"] = meeting.MeetingNumber
+				}
+
+				// Enrich: site URL
+				if meeting.SiteURL != "" {
+					em["siteURL"] = meeting.SiteURL
+				}
+
+				// Enrich: integration tags
+				if len(meeting.IntegrationTags) > 0 {
+					em["integrationTags"] = meeting.IntegrationTags
+				}
+
+				// Enrich: invitees (limited to first 10 for performance)
+				if len(meeting.Invitees) > 0 {
+					inviteeCount := len(meeting.Invitees)
+					inviteeLimit := 10
+					if inviteeCount <= inviteeLimit {
+						em["invitees"] = meeting.Invitees
+					} else {
+						// Include first 10 and note there are more
+						em["invitees"] = meeting.Invitees[:inviteeLimit]
+						em["inviteeCount"] = inviteeCount
+					}
+				}
+
+				// Enrich: password (if exists)
+				if meeting.Password != "" {
+					em["hasPassword"] = true
+				}
+
+				// Enrich: recurring meeting info (check if it's a recurring meeting by meeting type)
+				if meeting.MeetingType == "meetingSeries" {
+					em["isRecurring"] = true
 				}
 
 				enrichedMeetings = append(enrichedMeetings, em)
