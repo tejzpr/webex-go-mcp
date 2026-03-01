@@ -32,7 +32,7 @@ func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			mcp.WithString("roomId", mcp.Required(), mcp.Description("The ID of the room/space to list messages from. Get this from webex_rooms_list, or from a previous API response.")),
 			mcp.WithString("mentionedPeople", mcp.Description("Filter to only messages that mention specific people. Use the special value 'me' to find messages that mention the authenticated user. Otherwise pass a personId.")),
 			mcp.WithString("before", mcp.Description("List messages sent before this date/time (ISO 8601 format, e.g. '2026-02-01T00:00:00Z'). Useful for searching messages in a date range.")),
-			mcp.WithString("cursor", mcp.Description(CursorParamDescription)),
+			mcp.WithString("nextPageUrl", mcp.Description(NextPageUrlParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			client, err := resolver(ctx)
@@ -45,23 +45,23 @@ func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 
-			cursor := req.GetString("cursor", "")
+			nextPageUrl := req.GetString("nextPageUrl", "")
 
 			var msgItems []messages.Message
-			var hasMore bool
+			var hasNextPage bool
 			var nextURL string
 
-			if cursor != "" {
-				// Direct cursor navigation — O(1) API call
-				page, pErr := FetchPageFromCursor(client, cursor)
+			if nextPageUrl != "" {
+				// Direct next-page navigation — O(1) API call
+				page, pErr := FetchPage(client, nextPageUrl)
 				if pErr != nil {
-					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch page from cursor: %v", pErr)), nil
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch next page: %v", pErr)), nil
 				}
 				msgItems, err = UnmarshalPageItems[messages.Message](page)
 				if err != nil {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to parse messages: %v", err)), nil
 				}
-				hasMore = page.HasNext
+				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			} else {
 				// First page
@@ -82,7 +82,7 @@ func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver) {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to list messages: %v", pErr)), nil
 				}
 				msgItems = page.Items
-				hasMore = page.HasNext
+				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			}
 
@@ -147,7 +147,7 @@ func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				enrichedMessages = append(enrichedMessages, em)
 			}
 			response["messages"] = enrichedMessages
-			AddPaginationToMap(response, hasMore, nextURL)
+			AddPaginationToMap(response, hasNextPage, nextURL)
 
 			data, _ := json.MarshalIndent(response, "", "  ")
 			return mcp.NewToolResultText(string(data)), nil

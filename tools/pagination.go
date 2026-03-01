@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 
@@ -14,37 +13,14 @@ const (
 	PageSize = 10
 )
 
-// EncodeCursor encodes a NextPage URL into an opaque cursor string.
-func EncodeCursor(nextURL string) string {
-	if nextURL == "" {
-		return ""
-	}
-	return base64.URLEncoding.EncodeToString([]byte(nextURL))
-}
-
-// DecodeCursor decodes an opaque cursor back into a NextPage URL.
-func DecodeCursor(cursor string) (string, error) {
-	if cursor == "" {
-		return "", nil
-	}
-	b, err := base64.URLEncoding.DecodeString(cursor)
-	if err != nil {
-		return "", fmt.Errorf("invalid cursor: %w", err)
-	}
-	return string(b), nil
-}
-
-// FetchPageFromCursor fetches a page directly from a cursor using the SDK's PageFromCursor.
+// FetchPage fetches a page directly from a next-page URL using the SDK's PageFromCursor.
+// The nextPageUrl is the raw Webex API Link rel="next" URL from a previous response.
 // Returns the raw Page (with []json.RawMessage items).
-func FetchPageFromCursor(client *webex.WebexClient, cursor string) (*webexsdk.Page, error) {
-	cursorURL, err := DecodeCursor(cursor)
-	if err != nil {
-		return nil, err
+func FetchPage(client *webex.WebexClient, nextPageUrl string) (*webexsdk.Page, error) {
+	if nextPageUrl == "" {
+		return nil, fmt.Errorf("empty nextPageUrl")
 	}
-	if cursorURL == "" {
-		return nil, fmt.Errorf("empty cursor")
-	}
-	return client.Core().PageFromCursor(cursorURL)
+	return client.Core().PageFromCursor(nextPageUrl)
 }
 
 // UnmarshalPageItems unmarshals raw Page items ([]json.RawMessage) into a typed slice.
@@ -60,14 +36,14 @@ func UnmarshalPageItems[T any](page *webexsdk.Page) ([]T, error) {
 
 // PaginatedResponse is the standard response wrapper for all list tools.
 type PaginatedResponse struct {
-	Items      interface{} `json:"items"`
-	TotalItems int         `json:"totalItems"`
-	HasMore    bool        `json:"hasMore"`
-	Cursor     string      `json:"cursor,omitempty"`
+	Items       interface{} `json:"items"`
+	TotalItems  int         `json:"totalItems"`
+	HasNextPage bool        `json:"hasNextPage"`
+	NextPageUrl string      `json:"nextPageUrl,omitempty"`
 }
 
 // FormatPaginatedResponse builds the standard paginated JSON response.
-func FormatPaginatedResponse(items interface{}, hasMore bool, nextURL string) (string, error) {
+func FormatPaginatedResponse(items interface{}, hasNextPage bool, nextPageUrl string) (string, error) {
 	// Count items
 	itemsJSON, err := json.Marshal(items)
 	if err != nil {
@@ -80,10 +56,10 @@ func FormatPaginatedResponse(items interface{}, hasMore bool, nextURL string) (s
 	}
 
 	resp := PaginatedResponse{
-		Items:      items,
-		TotalItems: totalItems,
-		HasMore:    hasMore,
-		Cursor:     EncodeCursor(nextURL),
+		Items:       items,
+		TotalItems:  totalItems,
+		HasNextPage: hasNextPage,
+		NextPageUrl: nextPageUrl,
 	}
 
 	data, err := json.MarshalIndent(resp, "", "  ")
@@ -95,28 +71,27 @@ func FormatPaginatedResponse(items interface{}, hasMore bool, nextURL string) (s
 
 // AddPaginationToMap adds pagination fields to an existing response map.
 // Use this for tools that return wrapper objects (e.g. messages: {room, messages}).
-func AddPaginationToMap(response map[string]interface{}, hasMore bool, nextURL string) {
-	response["hasMore"] = hasMore
-	cursor := EncodeCursor(nextURL)
-	if cursor != "" {
-		response["cursor"] = cursor
+func AddPaginationToMap(response map[string]interface{}, hasNextPage bool, nextPageUrl string) {
+	response["hasNextPage"] = hasNextPage
+	if nextPageUrl != "" {
+		response["nextPageUrl"] = nextPageUrl
 	}
 }
 
 // PaginationDescription is the standard instruction block appended to all list tool descriptions.
 const PaginationDescription = "\n\n" +
 	"PAGINATION: Returns up to 10 items per request. The response includes:\n" +
-	"- 'hasMore' (boolean): true if more results exist beyond this page.\n" +
-	"- 'cursor' (string): an opaque token to fetch the next page.\n" +
+	"- 'hasNextPage' (boolean): true if more results are available.\n" +
+	"- 'nextPageUrl' (string): the Webex API URL to fetch the next page (RFC 5988 Link rel=\"next\").\n" +
 	"\n" +
-	"To get more results: call this same tool again with cursor=<cursor value from the previous response>.\n" +
-	"Stop when 'hasMore' is false or 'cursor' is absent.\n" +
-	"Do NOT modify the cursor value -- pass it exactly as received.\n" +
+	"To get more results: call this same tool again, passing the 'nextPageUrl' value from the response as the 'nextPageUrl' parameter.\n" +
+	"Stop when 'hasNextPage' is false or 'nextPageUrl' is absent.\n" +
+	"Do NOT modify the nextPageUrl value -- pass it exactly as received.\n" +
 	"\n" +
 	"Example flow:\n" +
-	"1. Call with no cursor → get first 10 items, hasMore=true, cursor='abc...'\n" +
-	"2. Call with cursor='abc...' → get next 10 items, hasMore=true, cursor='def...'\n" +
-	"3. Call with cursor='def...' → get last items, hasMore=false → done."
+	"1. First call: omit nextPageUrl → returns first page, hasNextPage=true, nextPageUrl='https://webexapis.com/v1/...'\n" +
+	"2. Next call: pass nextPageUrl='https://webexapis.com/v1/...' → next page, hasNextPage=true, nextPageUrl='https://...'\n" +
+	"3. Last call: → final page, hasNextPage=false → done."
 
-// CursorParamDescription is the standard description for the 'cursor' tool parameter.
-const CursorParamDescription = "Pagination cursor from a previous response. Pass this value exactly as received to fetch the next page of results. Do not pass this on the first call."
+// NextPageUrlParamDescription is the standard description for the 'nextPageUrl' tool parameter.
+const NextPageUrlParamDescription = "The nextPageUrl value from a previous response. Pass this exactly as received to fetch the next page. Omit on the first call."

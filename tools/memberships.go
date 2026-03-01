@@ -29,7 +29,7 @@ func RegisterMembershipTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			mcp.WithString("roomId", mcp.Description("Filter to members of this specific room. Returns all people in the room with display names and emails.")),
 			mcp.WithString("personId", mcp.Description("Filter to memberships for this specific person ID. Returns all rooms this person is in.")),
 			mcp.WithString("personEmail", mcp.Description("Filter to memberships for this person by email (e.g. 'alice@example.com'). Returns all rooms this person is in. This is the easiest way to find what rooms someone belongs to.")),
-			mcp.WithString("cursor", mcp.Description(CursorParamDescription)),
+			mcp.WithString("nextPageUrl", mcp.Description(NextPageUrlParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			client, err := resolver(ctx)
@@ -38,23 +38,23 @@ func RegisterMembershipTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			}
 
 			roomID := req.GetString("roomId", "")
-			cursor := req.GetString("cursor", "")
+			nextPageUrl := req.GetString("nextPageUrl", "")
 
 			var memberItems []memberships.Membership
-			var hasMore bool
+			var hasNextPage bool
 			var nextURL string
 
-			if cursor != "" {
-				// Direct cursor navigation — O(1) API call
-				page, pErr := FetchPageFromCursor(client, cursor)
+			if nextPageUrl != "" {
+				// Direct next-page navigation — O(1) API call
+				page, pErr := FetchPage(client, nextPageUrl)
 				if pErr != nil {
-					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch page from cursor: %v", pErr)), nil
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch next page: %v", pErr)), nil
 				}
 				memberItems, err = UnmarshalPageItems[memberships.Membership](page)
 				if err != nil {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to parse memberships: %v", err)), nil
 				}
-				hasMore = page.HasNext
+				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			} else {
 				// First page
@@ -75,7 +75,7 @@ func RegisterMembershipTools(s ToolRegistrar, resolver auth.ClientResolver) {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to list memberships: %v", lErr)), nil
 				}
 				memberItems = page.Items
-				hasMore = page.HasNext
+				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			}
 
@@ -91,7 +91,7 @@ func RegisterMembershipTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				}
 			}
 
-			AddPaginationToMap(response, hasMore, nextURL)
+			AddPaginationToMap(response, hasNextPage, nextURL)
 
 			data, _ := json.MarshalIndent(response, "", "  ")
 			return mcp.NewToolResultText(string(data)), nil

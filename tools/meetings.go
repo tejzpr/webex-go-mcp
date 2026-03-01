@@ -89,7 +89,7 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			mcp.WithString("meetingNumber", mcp.Description("Filter by the Webex meeting number (the numeric code used to join). Useful when the user provides a specific meeting number.")),
 			mcp.WithNumber("max", mcp.Description("Maximum number of meetings to return. Default varies by Webex API. Use 10-20 for searching, higher for comprehensive listing.")),
 			mcp.WithBoolean("current", mcp.Description("Set to true to get only currently active meetings. Default: false (gets meetings in date range).")),
-			mcp.WithString("cursor", mcp.Description(CursorParamDescription)),
+			mcp.WithString("nextPageUrl", mcp.Description(NextPageUrlParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			client, err := resolver(ctx)
@@ -97,23 +97,23 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
 			}
 
-			cursor := req.GetString("cursor", "")
+			nextPageUrl := req.GetString("nextPageUrl", "")
 
 			var meetingItems []meetings.Meeting
-			var hasMore bool
+			var hasNextPage bool
 			var nextURL string
 
-			if cursor != "" {
-				// Direct cursor navigation — O(1) API call
-				page, pErr := FetchPageFromCursor(client, cursor)
+			if nextPageUrl != "" {
+				// Direct next-page navigation — O(1) API call
+				page, pErr := FetchPage(client, nextPageUrl)
 				if pErr != nil {
-					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch page from cursor: %v", pErr)), nil
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch next page: %v", pErr)), nil
 				}
 				meetingItems, err = UnmarshalPageItems[meetings.Meeting](page)
 				if err != nil {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to parse meetings: %v", err)), nil
 				}
-				hasMore = page.HasNext
+				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			} else {
 				// First page
@@ -163,7 +163,7 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to list meetings: %v", lErr)), nil
 				}
 				meetingItems = page.Items
-				hasMore = page.HasNext
+				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			}
 
@@ -246,7 +246,7 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				enrichedMeetings = append(enrichedMeetings, em)
 			}
 
-			result, fErr := FormatPaginatedResponse(enrichedMeetings, hasMore, nextURL)
+			result, fErr := FormatPaginatedResponse(enrichedMeetings, hasNextPage, nextURL)
 			if fErr != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("Failed to format response: %v", fErr)), nil
 			}
@@ -532,7 +532,7 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				"RESPONSE: Each participant includes displayName, email, joinedTime, leftTime, state (joined/left/end), host/coHost flags, and device info."+
 				PaginationDescription),
 			mcp.WithString("meetingId", mcp.Required(), mcp.Description("The meeting instance ID (not the series ID). Get this from webex_meetings_list with meetingType='meeting'.")),
-			mcp.WithString("cursor", mcp.Description(CursorParamDescription)),
+			mcp.WithString("nextPageUrl", mcp.Description(NextPageUrlParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			client, err := resolver(ctx)
@@ -545,23 +545,23 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 
-			cursor := req.GetString("cursor", "")
+			nextPageUrl := req.GetString("nextPageUrl", "")
 
 			var participantItems []meetings.Participant
-			var hasMore bool
+			var hasNextPage bool
 			var nextURL string
 
-			if cursor != "" {
-				// Direct cursor navigation — O(1) API call
-				page, pErr := FetchPageFromCursor(client, cursor)
+			if nextPageUrl != "" {
+				// Direct next-page navigation — O(1) API call
+				page, pErr := FetchPage(client, nextPageUrl)
 				if pErr != nil {
-					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch page from cursor: %v", pErr)), nil
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch next page: %v", pErr)), nil
 				}
 				participantItems, err = UnmarshalPageItems[meetings.Participant](page)
 				if err != nil {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to parse participants: %v", err)), nil
 				}
-				hasMore = page.HasNext
+				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			} else {
 				// First page
@@ -575,11 +575,11 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to list participants: %v", pErr)), nil
 				}
 				participantItems = page.Items
-				hasMore = page.HasNext
+				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			}
 
-			result, fErr := FormatPaginatedResponse(participantItems, hasMore, nextURL)
+			result, fErr := FormatPaginatedResponse(participantItems, hasNextPage, nextURL)
 			if fErr != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("Failed to format response: %v", fErr)), nil
 			}

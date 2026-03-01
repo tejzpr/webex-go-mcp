@@ -37,7 +37,7 @@ func RegisterTranscriptTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			mcp.WithString("siteUrl", mcp.Description("Filter by Webex site URL. Usually not needed unless the user has multiple Webex sites.")),
 			mcp.WithString("from", mcp.Description("Start of date range (UTC format: '2026-01-01T00:00:00Z'). Defaults to 30 days ago. The from-to range must be within 30 days.")),
 			mcp.WithString("to", mcp.Description("End of date range (UTC format: '2026-02-06T23:59:59Z'). Defaults to now. The from-to range must be within 30 days.")),
-			mcp.WithString("cursor", mcp.Description(CursorParamDescription)),
+			mcp.WithString("nextPageUrl", mcp.Description(NextPageUrlParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			client, err := resolver(ctx)
@@ -45,23 +45,23 @@ func RegisterTranscriptTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
 			}
 
-			cursor := req.GetString("cursor", "")
+			nextPageUrl := req.GetString("nextPageUrl", "")
 
 			var transcriptItems []transcripts.Transcript
-			var hasMore bool
+			var hasNextPage bool
 			var nextURL string
 
-			if cursor != "" {
-				// Direct cursor navigation — O(1) API call
-				page, pErr := FetchPageFromCursor(client, cursor)
+			if nextPageUrl != "" {
+				// Direct next-page navigation — O(1) API call
+				page, pErr := FetchPage(client, nextPageUrl)
 				if pErr != nil {
-					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch page from cursor: %v", pErr)), nil
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch next page: %v", pErr)), nil
 				}
 				transcriptItems, err = UnmarshalPageItems[transcripts.Transcript](page)
 				if err != nil {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to parse transcripts: %v", err)), nil
 				}
-				hasMore = page.HasNext
+				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			} else {
 				// First page
@@ -96,7 +96,7 @@ func RegisterTranscriptTools(s ToolRegistrar, resolver auth.ClientResolver) {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to list transcripts: %v", lErr)), nil
 				}
 				transcriptItems = page.Items
-				hasMore = page.HasNext
+				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			}
 
@@ -143,7 +143,7 @@ func RegisterTranscriptTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				enrichedTranscripts = append(enrichedTranscripts, et)
 			}
 
-			result, fErr := FormatPaginatedResponse(enrichedTranscripts, hasMore, nextURL)
+			result, fErr := FormatPaginatedResponse(enrichedTranscripts, hasNextPage, nextURL)
 			if fErr != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("Failed to format response: %v", fErr)), nil
 			}
@@ -211,7 +211,7 @@ func RegisterTranscriptTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				"TIP: webex_transcripts_list already includes the first 3 snippets as a preview. Use this tool only if you need more snippets or the full conversation in structured form. For the complete transcript as plain text, use webex_transcripts_download instead."+
 				PaginationDescription),
 			mcp.WithString("transcriptId", mcp.Required(), mcp.Description("The transcript ID. Get this from webex_transcripts_list ('id' field in each transcript).")),
-			mcp.WithString("cursor", mcp.Description(CursorParamDescription)),
+			mcp.WithString("nextPageUrl", mcp.Description(NextPageUrlParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			client, err := resolver(ctx)
@@ -224,23 +224,23 @@ func RegisterTranscriptTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 
-			cursor := req.GetString("cursor", "")
+			nextPageUrl := req.GetString("nextPageUrl", "")
 
 			var snippetItems []transcripts.Snippet
-			var hasMore bool
+			var hasNextPage bool
 			var nextURL string
 
-			if cursor != "" {
-				// Direct cursor navigation — O(1) API call
-				page, pErr := FetchPageFromCursor(client, cursor)
+			if nextPageUrl != "" {
+				// Direct next-page navigation — O(1) API call
+				page, pErr := FetchPage(client, nextPageUrl)
 				if pErr != nil {
-					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch page from cursor: %v", pErr)), nil
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch next page: %v", pErr)), nil
 				}
 				snippetItems, err = UnmarshalPageItems[transcripts.Snippet](page)
 				if err != nil {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to parse snippets: %v", err)), nil
 				}
-				hasMore = page.HasNext
+				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			} else {
 				// First page
@@ -251,11 +251,11 @@ func RegisterTranscriptTools(s ToolRegistrar, resolver auth.ClientResolver) {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to list snippets: %v", pErr)), nil
 				}
 				snippetItems = page.Items
-				hasMore = page.HasNext
+				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			}
 
-			result, fErr := FormatPaginatedResponse(snippetItems, hasMore, nextURL)
+			result, fErr := FormatPaginatedResponse(snippetItems, hasNextPage, nextURL)
 			if fErr != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("Failed to format response: %v", fErr)), nil
 			}

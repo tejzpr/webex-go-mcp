@@ -19,7 +19,7 @@ func RegisterWebhookTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				"\n"+
 				"RESPONSE: Each webhook shows its name, targetUrl, resource, event, filter, status (active/inactive), and creation date."+
 				PaginationDescription),
-			mcp.WithString("cursor", mcp.Description(CursorParamDescription)),
+			mcp.WithString("nextPageUrl", mcp.Description(NextPageUrlParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			client, err := resolver(ctx)
@@ -27,23 +27,23 @@ func RegisterWebhookTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
 			}
 
-			cursor := req.GetString("cursor", "")
+			nextPageUrl := req.GetString("nextPageUrl", "")
 
 			var items []webhooks.Webhook
-			var hasMore bool
+			var hasNextPage bool
 			var nextURL string
 
-			if cursor != "" {
-				// Direct cursor navigation — O(1) API call
-				page, pErr := FetchPageFromCursor(client, cursor)
+			if nextPageUrl != "" {
+				// Direct next-page navigation — O(1) API call
+				page, pErr := FetchPage(client, nextPageUrl)
 				if pErr != nil {
-					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch page from cursor: %v", pErr)), nil
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch next page: %v", pErr)), nil
 				}
 				items, err = UnmarshalPageItems[webhooks.Webhook](page)
 				if err != nil {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to parse webhooks: %v", err)), nil
 				}
-				hasMore = page.HasNext
+				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			} else {
 				// First page
@@ -53,11 +53,11 @@ func RegisterWebhookTools(s ToolRegistrar, resolver auth.ClientResolver) {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to list webhooks: %v", pErr)), nil
 				}
 				items = page.Items
-				hasMore = page.HasNext
+				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			}
 
-			result, fErr := FormatPaginatedResponse(items, hasMore, nextURL)
+			result, fErr := FormatPaginatedResponse(items, hasNextPage, nextURL)
 			if fErr != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("Failed to format response: %v", fErr)), nil
 			}

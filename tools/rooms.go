@@ -38,7 +38,7 @@ func RegisterRoomTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			mcp.WithString("teamId", mcp.Description("Filter to only rooms that belong to this team. Get a teamId from webex_teams_list.")),
 			mcp.WithString("type", mcp.Description("Filter by room type. 'direct' = 1:1 conversations (room title is the other person's name). 'group' = named multi-person spaces. Omit to get both types.")),
 			mcp.WithString("sortBy", mcp.Description("Sort order: 'lastactivity' (most recently active first -- RECOMMENDED for finding recent conversations), 'created' (newest first), or 'id' (default, by room ID).")),
-			mcp.WithString("cursor", mcp.Description(CursorParamDescription)),
+			mcp.WithString("nextPageUrl", mcp.Description(NextPageUrlParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			client, err := resolver(ctx)
@@ -46,23 +46,23 @@ func RegisterRoomTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
 			}
 
-			cursor := req.GetString("cursor", "")
+			nextPageUrl := req.GetString("nextPageUrl", "")
 
 			var roomItems []rooms.Room
-			var hasMore bool
+			var hasNextPage bool
 			var nextURL string
 
-			if cursor != "" {
-				// Direct cursor navigation — O(1) API call
-				page, pErr := FetchPageFromCursor(client, cursor)
+			if nextPageUrl != "" {
+				// Direct next-page navigation — O(1) API call
+				page, pErr := FetchPage(client, nextPageUrl)
 				if pErr != nil {
-					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch page from cursor: %v", pErr)), nil
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch next page: %v", pErr)), nil
 				}
 				roomItems, err = UnmarshalPageItems[rooms.Room](page)
 				if err != nil {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to parse rooms: %v", err)), nil
 				}
-				hasMore = page.HasNext
+				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			} else {
 				// First page
@@ -83,7 +83,7 @@ func RegisterRoomTools(s ToolRegistrar, resolver auth.ClientResolver) {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to list rooms: %v", pErr)), nil
 				}
 				roomItems = page.Items
-				hasMore = page.HasNext
+				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			}
 
@@ -130,7 +130,7 @@ func RegisterRoomTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				enrichedRooms = append(enrichedRooms, er)
 			}
 
-			result, fErr := FormatPaginatedResponse(enrichedRooms, hasMore, nextURL)
+			result, fErr := FormatPaginatedResponse(enrichedRooms, hasNextPage, nextURL)
 			if fErr != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("Failed to format response: %v", fErr)), nil
 			}

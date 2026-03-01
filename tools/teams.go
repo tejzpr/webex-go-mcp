@@ -27,7 +27,7 @@ func RegisterTeamTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				"\n"+
 				"RESPONSE: Enriched with creator name, room count, and a list of rooms (with titles) for each team -- so you don't need a follow-up call to see what's inside."+
 				PaginationDescription),
-			mcp.WithString("cursor", mcp.Description(CursorParamDescription)),
+			mcp.WithString("nextPageUrl", mcp.Description(NextPageUrlParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			client, err := resolver(ctx)
@@ -35,23 +35,23 @@ func RegisterTeamTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
 			}
 
-			cursor := req.GetString("cursor", "")
+			nextPageUrl := req.GetString("nextPageUrl", "")
 
 			var teamItems []teams.Team
-			var hasMore bool
+			var hasNextPage bool
 			var nextURL string
 
-			if cursor != "" {
-				// Direct cursor navigation — O(1) API call
-				page, pErr := FetchPageFromCursor(client, cursor)
+			if nextPageUrl != "" {
+				// Direct next-page navigation — O(1) API call
+				page, pErr := FetchPage(client, nextPageUrl)
 				if pErr != nil {
-					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch page from cursor: %v", pErr)), nil
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch next page: %v", pErr)), nil
 				}
 				teamItems, err = UnmarshalPageItems[teams.Team](page)
 				if err != nil {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to parse teams: %v", err)), nil
 				}
-				hasMore = page.HasNext
+				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			} else {
 				// First page
@@ -62,7 +62,7 @@ func RegisterTeamTools(s ToolRegistrar, resolver auth.ClientResolver) {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to list teams: %v", pErr)), nil
 				}
 				teamItems = page.Items
-				hasMore = page.HasNext
+				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			}
 
@@ -98,7 +98,7 @@ func RegisterTeamTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				enrichedTeams = append(enrichedTeams, et)
 			}
 
-			result, fErr := FormatPaginatedResponse(enrichedTeams, hasMore, nextURL)
+			result, fErr := FormatPaginatedResponse(enrichedTeams, hasNextPage, nextURL)
 			if fErr != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("Failed to format response: %v", fErr)), nil
 			}

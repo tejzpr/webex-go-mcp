@@ -38,7 +38,7 @@ func RegisterRecordingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			mcp.WithString("status", mcp.Description("Filter by recording status (e.g., 'available', 'processing', 'failed').")),
 			mcp.WithString("topic", mcp.Description("Filter by recording topic (meeting title).")),
 			mcp.WithString("format", mcp.Description("Filter by recording format (e.g., 'mp4', 'mp3', 'wav').")),
-			mcp.WithString("cursor", mcp.Description(CursorParamDescription)),
+			mcp.WithString("nextPageUrl", mcp.Description(NextPageUrlParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			client, err := resolver(ctx)
@@ -46,23 +46,23 @@ func RegisterRecordingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
 			}
 
-			cursor := req.GetString("cursor", "")
+			nextPageUrl := req.GetString("nextPageUrl", "")
 
 			var recordingItems []recordings.Recording
-			var hasMore bool
+			var hasNextPage bool
 			var nextURL string
 
-			if cursor != "" {
-				// Direct cursor navigation — O(1) API call
-				page, pErr := FetchPageFromCursor(client, cursor)
+			if nextPageUrl != "" {
+				// Direct next-page navigation — O(1) API call
+				page, pErr := FetchPage(client, nextPageUrl)
 				if pErr != nil {
-					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch page from cursor: %v", pErr)), nil
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch next page: %v", pErr)), nil
 				}
 				recordingItems, err = UnmarshalPageItems[recordings.Recording](page)
 				if err != nil {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to parse recordings: %v", err)), nil
 				}
-				hasMore = page.HasNext
+				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			} else {
 				// First page
@@ -115,7 +115,7 @@ func RegisterRecordingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to list recordings: %v", lErr)), nil
 				}
 				recordingItems = page.Items
-				hasMore = page.HasNext
+				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			}
 
@@ -217,7 +217,7 @@ func RegisterRecordingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				enrichedRecordings = append(enrichedRecordings, er)
 			}
 
-			result, fErr := FormatPaginatedResponse(enrichedRecordings, hasMore, nextURL)
+			result, fErr := FormatPaginatedResponse(enrichedRecordings, hasNextPage, nextURL)
 			if fErr != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("Failed to format response: %v", fErr)), nil
 			}
