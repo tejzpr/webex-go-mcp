@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/WebexCommunity/webex-go-sdk/v2/webhooks"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/tejzpr/webex-go-mcp/auth"
-	"github.com/WebexCommunity/webex-go-sdk/v2/webhooks"
 )
 
 // RegisterWebhookTools registers all webhook-related MCP tools.
@@ -17,8 +17,9 @@ func RegisterWebhookTools(s ToolRegistrar, resolver auth.ClientResolver) {
 		mcp.NewTool("webex_webhooks_list",
 			mcp.WithDescription("List all Webex webhooks registered by the authenticated user. A webhook is a callback URL that Webex notifies when specific events happen (e.g. new message, meeting started, membership changed).\n"+
 				"\n"+
-				"RESPONSE: Each webhook shows its name, targetUrl, resource, event, filter, status (active/inactive), and creation date."),
-			mcp.WithNumber("max", mcp.Description("Maximum number of webhooks to return.")),
+				"RESPONSE: Each webhook shows its name, targetUrl, resource, event, filter, status (active/inactive), and creation date."+
+				PaginationDescription),
+			mcp.WithString("cursor", mcp.Description(CursorParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			client, err := resolver(ctx)
@@ -26,19 +27,41 @@ func RegisterWebhookTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
 			}
 
-			opts := &webhooks.ListOptions{}
+			cursor := req.GetString("cursor", "")
 
-			if v := req.GetInt("max", 0); v > 0 {
-				opts.Max = v
+			var items []webhooks.Webhook
+			var hasMore bool
+			var nextURL string
+
+			if cursor != "" {
+				// Direct cursor navigation — O(1) API call
+				page, pErr := FetchPageFromCursor(client, cursor)
+				if pErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch page from cursor: %v", pErr)), nil
+				}
+				items, err = UnmarshalPageItems[webhooks.Webhook](page)
+				if err != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to parse webhooks: %v", err)), nil
+				}
+				hasMore = page.HasNext
+				nextURL = page.NextPage
+			} else {
+				// First page
+				opts := &webhooks.ListOptions{Max: PageSize}
+				page, pErr := client.Webhooks().List(opts)
+				if pErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to list webhooks: %v", pErr)), nil
+				}
+				items = page.Items
+				hasMore = page.HasNext
+				nextURL = page.NextPage
 			}
 
-			page, err := client.Webhooks().List(opts)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("Failed to list webhooks: %v", err)), nil
+			result, fErr := FormatPaginatedResponse(items, hasMore, nextURL)
+			if fErr != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to format response: %v", fErr)), nil
 			}
-
-			data, _ := json.MarshalIndent(page.Items, "", "  ")
-			return mcp.NewToolResultText(string(data)), nil
+			return mcp.NewToolResultText(result), nil
 		},
 	)
 

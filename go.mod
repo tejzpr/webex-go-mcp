@@ -3,9 +3,9 @@ module github.com/tejzpr/webex-go-mcp
 go 1.25.0
 
 require (
-	github.com/WebexCommunity/webex-go-sdk/v2 v2.0.13
+	github.com/WebexCommunity/webex-go-sdk/v2 v2.0.16
 	github.com/lib/pq v1.11.2
-	github.com/mark3labs/mcp-go v0.44.0
+	github.com/mark3labs/mcp-go v0.44.1
 	github.com/mattn/go-sqlite3 v1.14.34
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0

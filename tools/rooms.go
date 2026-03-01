@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/tejzpr/webex-go-mcp/auth"
 	"github.com/WebexCommunity/webex-go-sdk/v2/memberships"
 	"github.com/WebexCommunity/webex-go-sdk/v2/messages"
 	"github.com/WebexCommunity/webex-go-sdk/v2/rooms"
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/tejzpr/webex-go-mcp/auth"
 )
 
 // RegisterRoomTools registers all room/space-related MCP tools.
@@ -33,11 +33,12 @@ func RegisterRoomTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				"- You do NOT need to find a room to DM someone. Use webex_messages_create with 'toPersonEmail' directly -- it's much simpler.\n"+
 				"- You only need a roomId when you want to read messages from a conversation (webex_messages_list requires it).\n"+
 				"\n"+
-				"RESPONSE: Enriched with team name, member count, and last message preview per room."),
+				"RESPONSE: Enriched with team name, member count, and last message preview per room."+
+				PaginationDescription),
 			mcp.WithString("teamId", mcp.Description("Filter to only rooms that belong to this team. Get a teamId from webex_teams_list.")),
 			mcp.WithString("type", mcp.Description("Filter by room type. 'direct' = 1:1 conversations (room title is the other person's name). 'group' = named multi-person spaces. Omit to get both types.")),
 			mcp.WithString("sortBy", mcp.Description("Sort order: 'lastactivity' (most recently active first -- RECOMMENDED for finding recent conversations), 'created' (newest first), or 'id' (default, by room ID).")),
-			mcp.WithNumber("max", mcp.Description("Maximum number of rooms to return. Use a small number (10-20) when searching for a specific room, larger when listing all rooms.")),
+			mcp.WithString("cursor", mcp.Description(CursorParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			client, err := resolver(ctx)
@@ -45,31 +46,52 @@ func RegisterRoomTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
 			}
 
-			opts := &rooms.ListOptions{}
+			cursor := req.GetString("cursor", "")
 
-			if v := req.GetString("teamId", ""); v != "" {
-				opts.TeamID = v
-			}
-			if v := req.GetString("type", ""); v != "" {
-				opts.Type = v
-			}
-			if v := req.GetString("sortBy", ""); v != "" {
-				opts.SortBy = v
-			}
-			if v := req.GetInt("max", 0); v > 0 {
-				opts.Max = v
-			}
+			var roomItems []rooms.Room
+			var hasMore bool
+			var nextURL string
 
-			page, rErr := client.Rooms().List(opts)
-			if rErr != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("Failed to list rooms: %v", rErr)), nil
+			if cursor != "" {
+				// Direct cursor navigation — O(1) API call
+				page, pErr := FetchPageFromCursor(client, cursor)
+				if pErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch page from cursor: %v", pErr)), nil
+				}
+				roomItems, err = UnmarshalPageItems[rooms.Room](page)
+				if err != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to parse rooms: %v", err)), nil
+				}
+				hasMore = page.HasNext
+				nextURL = page.NextPage
+			} else {
+				// First page
+				opts := &rooms.ListOptions{Max: PageSize}
+
+				if v := req.GetString("teamId", ""); v != "" {
+					opts.TeamID = v
+				}
+				if v := req.GetString("type", ""); v != "" {
+					opts.Type = v
+				}
+				if v := req.GetString("sortBy", ""); v != "" {
+					opts.SortBy = v
+				}
+
+				page, pErr := client.Rooms().List(opts)
+				if pErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to list rooms: %v", pErr)), nil
+				}
+				roomItems = page.Items
+				hasMore = page.HasNext
+				nextURL = page.NextPage
 			}
 
 			// Enrich each room
 			teamCache := NewTeamNameCache(client)
-			enrichedRooms := make([]map[string]interface{}, 0, len(page.Items))
+			enrichedRooms := make([]map[string]interface{}, 0, len(roomItems))
 
-			for _, room := range page.Items {
+			for _, room := range roomItems {
 				er := map[string]interface{}{
 					"room": room,
 				}
@@ -108,8 +130,11 @@ func RegisterRoomTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				enrichedRooms = append(enrichedRooms, er)
 			}
 
-			data, _ := json.MarshalIndent(enrichedRooms, "", "  ")
-			return mcp.NewToolResultText(string(data)), nil
+			result, fErr := FormatPaginatedResponse(enrichedRooms, hasMore, nextURL)
+			if fErr != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to format response: %v", fErr)), nil
+			}
+			return mcp.NewToolResultText(result), nil
 		},
 	)
 

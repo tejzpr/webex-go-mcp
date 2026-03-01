@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/WebexCommunity/webex-go-sdk/v2/memberships"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/tejzpr/webex-go-mcp/auth"
-	"github.com/WebexCommunity/webex-go-sdk/v2/memberships"
 )
 
 // RegisterMembershipTools registers all membership-related MCP tools.
@@ -24,11 +24,12 @@ func RegisterMembershipTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				"\n"+
 				"TIP: You usually don't need this tool to find out who is in a room. webex_rooms_get already includes the full member list in its enriched response. Use this tool when you need to search across rooms by person.\n"+
 				"\n"+
-				"RESPONSE: Each membership includes personDisplayName and personEmail. When filtered by roomId, the response is enriched with the room title."),
+				"RESPONSE: Each membership includes personDisplayName and personEmail. When filtered by roomId, the response is enriched with the room title."+
+				PaginationDescription),
 			mcp.WithString("roomId", mcp.Description("Filter to members of this specific room. Returns all people in the room with display names and emails.")),
 			mcp.WithString("personId", mcp.Description("Filter to memberships for this specific person ID. Returns all rooms this person is in.")),
 			mcp.WithString("personEmail", mcp.Description("Filter to memberships for this person by email (e.g. 'alice@example.com'). Returns all rooms this person is in. This is the easiest way to find what rooms someone belongs to.")),
-			mcp.WithNumber("max", mcp.Description("Maximum number of memberships to return.")),
+			mcp.WithString("cursor", mcp.Description(CursorParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			client, err := resolver(ctx)
@@ -36,30 +37,51 @@ func RegisterMembershipTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
 			}
 
-			opts := &memberships.ListOptions{}
-
 			roomID := req.GetString("roomId", "")
-			if roomID != "" {
-				opts.RoomID = roomID
-			}
-			if v := req.GetString("personId", ""); v != "" {
-				opts.PersonID = v
-			}
-			if v := req.GetString("personEmail", ""); v != "" {
-				opts.PersonEmail = v
-			}
-			if v := req.GetInt("max", 0); v > 0 {
-				opts.Max = v
-			}
+			cursor := req.GetString("cursor", "")
 
-			page, lErr := client.Memberships().List(opts)
-			if lErr != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("Failed to list memberships: %v", lErr)), nil
+			var memberItems []memberships.Membership
+			var hasMore bool
+			var nextURL string
+
+			if cursor != "" {
+				// Direct cursor navigation — O(1) API call
+				page, pErr := FetchPageFromCursor(client, cursor)
+				if pErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch page from cursor: %v", pErr)), nil
+				}
+				memberItems, err = UnmarshalPageItems[memberships.Membership](page)
+				if err != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to parse memberships: %v", err)), nil
+				}
+				hasMore = page.HasNext
+				nextURL = page.NextPage
+			} else {
+				// First page
+				opts := &memberships.ListOptions{Max: PageSize}
+
+				if roomID != "" {
+					opts.RoomID = roomID
+				}
+				if v := req.GetString("personId", ""); v != "" {
+					opts.PersonID = v
+				}
+				if v := req.GetString("personEmail", ""); v != "" {
+					opts.PersonEmail = v
+				}
+
+				page, lErr := client.Memberships().List(opts)
+				if lErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to list memberships: %v", lErr)), nil
+				}
+				memberItems = page.Items
+				hasMore = page.HasNext
+				nextURL = page.NextPage
 			}
 
 			// Build enriched response
 			response := map[string]interface{}{
-				"memberships": page.Items,
+				"memberships": memberItems,
 			}
 
 			// Enrich: room title when roomId is provided
@@ -68,6 +90,8 @@ func RegisterMembershipTools(s ToolRegistrar, resolver auth.ClientResolver) {
 					response["room"] = roomInfo
 				}
 			}
+
+			AddPaginationToMap(response, hasMore, nextURL)
 
 			data, _ := json.MarshalIndent(response, "", "  ")
 			return mcp.NewToolResultText(string(data)), nil

@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/WebexCommunity/webex-go-sdk/v2/messages"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/tejzpr/webex-go-mcp/auth"
-	"github.com/WebexCommunity/webex-go-sdk/v2/messages"
 )
 
 // RegisterMessageTools registers all message-related MCP tools.
@@ -27,14 +27,12 @@ func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				"- To read a 1:1 conversation with someone: use webex_rooms_list with type='direct' to list all 1:1 rooms. The room title for 1:1 rooms is the other person's display name.\n"+
 				"- If you already have a roomId from a previous response, use it directly.\n"+
 				"\n"+
-				"PAGINATION: Returns latest 20 messages by default (newest first). To load older messages, pass the ID of the oldest message from your last result as 'beforeMessage'. Keep paginating until you get fewer results than 'max' or an empty list.\n"+
-				"\n"+
-				"RESPONSE: Enriched with room title, sender display names (resolved from IDs), and file attachment metadata (filename, size, content-type) for each message."),
+				"RESPONSE: Enriched with room title, sender display names (resolved from IDs), and file attachment metadata (filename, size, content-type) for each message."+
+				PaginationDescription),
 			mcp.WithString("roomId", mcp.Required(), mcp.Description("The ID of the room/space to list messages from. Get this from webex_rooms_list, or from a previous API response.")),
 			mcp.WithString("mentionedPeople", mcp.Description("Filter to only messages that mention specific people. Use the special value 'me' to find messages that mention the authenticated user. Otherwise pass a personId.")),
 			mcp.WithString("before", mcp.Description("List messages sent before this date/time (ISO 8601 format, e.g. '2026-02-01T00:00:00Z'). Useful for searching messages in a date range.")),
-			mcp.WithString("beforeMessage", mcp.Description("List messages sent before this message ID. Use this for pagination: pass the ID of the oldest message from the previous page to load the next page of older messages.")),
-			mcp.WithNumber("max", mcp.Description("Maximum number of messages to return (default 20, max 1000). Start with a small number like 20 and paginate if you need more.")),
+			mcp.WithString("cursor", mcp.Description(CursorParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			client, err := resolver(ctx)
@@ -47,24 +45,45 @@ func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 
-			opts := &messages.ListOptions{
-				RoomID: roomID,
-			}
+			cursor := req.GetString("cursor", "")
 
-			if v := req.GetString("mentionedPeople", ""); v != "" {
-				opts.MentionedPeople = v
-			}
-			if v := req.GetString("before", ""); v != "" {
-				opts.Before = v
-			}
-			if v := req.GetString("beforeMessage", ""); v != "" {
-				opts.BeforeMessage = v
-			}
-			opts.Max = req.GetInt("max", 20)
+			var msgItems []messages.Message
+			var hasMore bool
+			var nextURL string
 
-			page, err := client.Messages().List(opts)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("Failed to list messages: %v", err)), nil
+			if cursor != "" {
+				// Direct cursor navigation — O(1) API call
+				page, pErr := FetchPageFromCursor(client, cursor)
+				if pErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch page from cursor: %v", pErr)), nil
+				}
+				msgItems, err = UnmarshalPageItems[messages.Message](page)
+				if err != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to parse messages: %v", err)), nil
+				}
+				hasMore = page.HasNext
+				nextURL = page.NextPage
+			} else {
+				// First page
+				opts := &messages.ListOptions{
+					RoomID: roomID,
+					Max:    PageSize,
+				}
+
+				if v := req.GetString("mentionedPeople", ""); v != "" {
+					opts.MentionedPeople = v
+				}
+				if v := req.GetString("before", ""); v != "" {
+					opts.Before = v
+				}
+
+				page, pErr := client.Messages().List(opts)
+				if pErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to list messages: %v", pErr)), nil
+				}
+				msgItems = page.Items
+				hasMore = page.HasNext
+				nextURL = page.NextPage
 			}
 
 			// Build enriched response
@@ -77,8 +96,8 @@ func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver) {
 
 			// Enrich: sender names (deduplicated) + file metadata per message
 			nameCache := NewPersonNameCache(client)
-			enrichedMessages := make([]map[string]interface{}, 0, len(page.Items))
-			for _, msg := range page.Items {
+			enrichedMessages := make([]map[string]interface{}, 0, len(msgItems))
+			for _, msg := range msgItems {
 				em := map[string]interface{}{
 					"id":          msg.ID,
 					"roomId":      msg.RoomID,
@@ -128,6 +147,7 @@ func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				enrichedMessages = append(enrichedMessages, em)
 			}
 			response["messages"] = enrichedMessages
+			AddPaginationToMap(response, hasMore, nextURL)
 
 			data, _ := json.MarshalIndent(response, "", "  ")
 			return mcp.NewToolResultText(string(data)), nil

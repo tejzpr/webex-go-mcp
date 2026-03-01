@@ -30,13 +30,14 @@ func RegisterTranscriptTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				"- snippetPreview: First 3 spoken snippets showing who said what -- enough to understand the discussion topic without downloading the full transcript.\n"+
 				"- transcript: Includes both 'id' (transcriptId) and 'meetingId' -- you need BOTH to download the full transcript with webex_transcripts_download.\n"+
 				"\n"+
-				"WORKFLOW: List transcripts → pick one → use its transcriptId + meetingId to call webex_transcripts_download."),
+				"WORKFLOW: List transcripts → pick one → use its transcriptId + meetingId to call webex_transcripts_download."+
+				PaginationDescription),
 			mcp.WithString("meetingId", mcp.Description("Filter to transcripts for a specific meeting. Get the meetingId from webex_meetings_list (look for meetings where hasTranscription=true) or from webex_meetings_get.")),
 			mcp.WithString("hostEmail", mcp.Description("Filter to transcripts from meetings hosted by this email address.")),
 			mcp.WithString("siteUrl", mcp.Description("Filter by Webex site URL. Usually not needed unless the user has multiple Webex sites.")),
 			mcp.WithString("from", mcp.Description("Start of date range (UTC format: '2026-01-01T00:00:00Z'). Defaults to 30 days ago. The from-to range must be within 30 days.")),
 			mcp.WithString("to", mcp.Description("End of date range (UTC format: '2026-02-06T23:59:59Z'). Defaults to now. The from-to range must be within 30 days.")),
-			mcp.WithNumber("max", mcp.Description("Maximum number of transcripts to return.")),
+			mcp.WithString("cursor", mcp.Description(CursorParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			client, err := resolver(ctx)
@@ -44,43 +45,64 @@ func RegisterTranscriptTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
 			}
 
-			opts := &transcripts.ListOptions{}
+			cursor := req.GetString("cursor", "")
 
-			if v := req.GetString("meetingId", ""); v != "" {
-				opts.MeetingID = v
-			}
-			if v := req.GetString("hostEmail", ""); v != "" {
-				opts.HostEmail = v
-			}
-			if v := req.GetString("siteUrl", ""); v != "" {
-				opts.SiteURL = v
-			}
-			if v := req.GetString("from", ""); v != "" {
-				convertedFrom, err := validateAndConvertISO8601(v, "from")
-				if err != nil {
-					return mcp.NewToolResultError(err.Error()), nil
-				}
-				opts.From = convertedFrom
-			}
-			if v := req.GetString("to", ""); v != "" {
-				convertedTo, err := validateAndConvertISO8601(v, "to")
-				if err != nil {
-					return mcp.NewToolResultError(err.Error()), nil
-				}
-				opts.To = convertedTo
-			}
-			if v := req.GetInt("max", 0); v > 0 {
-				opts.Max = v
-			}
+			var transcriptItems []transcripts.Transcript
+			var hasMore bool
+			var nextURL string
 
-			page, lErr := client.Transcripts().List(opts)
-			if lErr != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("Failed to list transcripts: %v", lErr)), nil
+			if cursor != "" {
+				// Direct cursor navigation — O(1) API call
+				page, pErr := FetchPageFromCursor(client, cursor)
+				if pErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch page from cursor: %v", pErr)), nil
+				}
+				transcriptItems, err = UnmarshalPageItems[transcripts.Transcript](page)
+				if err != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to parse transcripts: %v", err)), nil
+				}
+				hasMore = page.HasNext
+				nextURL = page.NextPage
+			} else {
+				// First page
+				opts := &transcripts.ListOptions{Max: PageSize}
+
+				if v := req.GetString("meetingId", ""); v != "" {
+					opts.MeetingID = v
+				}
+				if v := req.GetString("hostEmail", ""); v != "" {
+					opts.HostEmail = v
+				}
+				if v := req.GetString("siteUrl", ""); v != "" {
+					opts.SiteURL = v
+				}
+				if v := req.GetString("from", ""); v != "" {
+					convertedFrom, err := validateAndConvertISO8601(v, "from")
+					if err != nil {
+						return mcp.NewToolResultError(err.Error()), nil
+					}
+					opts.From = convertedFrom
+				}
+				if v := req.GetString("to", ""); v != "" {
+					convertedTo, err := validateAndConvertISO8601(v, "to")
+					if err != nil {
+						return mcp.NewToolResultError(err.Error()), nil
+					}
+					opts.To = convertedTo
+				}
+
+				page, lErr := client.Transcripts().List(opts)
+				if lErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to list transcripts: %v", lErr)), nil
+				}
+				transcriptItems = page.Items
+				hasMore = page.HasNext
+				nextURL = page.NextPage
 			}
 
 			// Enrich each transcript with meeting title and snippet preview
-			enrichedTranscripts := make([]map[string]interface{}, 0, len(page.Items))
-			for _, t := range page.Items {
+			enrichedTranscripts := make([]map[string]interface{}, 0, len(transcriptItems))
+			for _, t := range transcriptItems {
 				et := map[string]interface{}{
 					"transcript": t,
 				}
@@ -121,8 +143,11 @@ func RegisterTranscriptTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				enrichedTranscripts = append(enrichedTranscripts, et)
 			}
 
-			data, _ := json.MarshalIndent(enrichedTranscripts, "", "  ")
-			return mcp.NewToolResultText(string(data)), nil
+			result, fErr := FormatPaginatedResponse(enrichedTranscripts, hasMore, nextURL)
+			if fErr != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to format response: %v", fErr)), nil
+			}
+			return mcp.NewToolResultText(result), nil
 		},
 	)
 
@@ -183,9 +208,10 @@ func RegisterTranscriptTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				"- Find what a specific person said (filter client-side by personName).\n"+
 				"- Get more granular data than the full download (which is just plain text).\n"+
 				"\n"+
-				"TIP: webex_transcripts_list already includes the first 3 snippets as a preview. Use this tool only if you need more snippets or the full conversation in structured form. For the complete transcript as plain text, use webex_transcripts_download instead."),
+				"TIP: webex_transcripts_list already includes the first 3 snippets as a preview. Use this tool only if you need more snippets or the full conversation in structured form. For the complete transcript as plain text, use webex_transcripts_download instead."+
+				PaginationDescription),
 			mcp.WithString("transcriptId", mcp.Required(), mcp.Description("The transcript ID. Get this from webex_transcripts_list ('id' field in each transcript).")),
-			mcp.WithNumber("max", mcp.Description("Maximum number of snippets to return. Each snippet is one spoken utterance. A 30-minute meeting might have 50-200 snippets. Start with 20-50 for an overview.")),
+			mcp.WithString("cursor", mcp.Description(CursorParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			client, err := resolver(ctx)
@@ -198,18 +224,42 @@ func RegisterTranscriptTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 
-			opts := &transcripts.SnippetListOptions{}
-			if v := req.GetInt("max", 0); v > 0 {
-				opts.Max = v
+			cursor := req.GetString("cursor", "")
+
+			var snippetItems []transcripts.Snippet
+			var hasMore bool
+			var nextURL string
+
+			if cursor != "" {
+				// Direct cursor navigation — O(1) API call
+				page, pErr := FetchPageFromCursor(client, cursor)
+				if pErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch page from cursor: %v", pErr)), nil
+				}
+				snippetItems, err = UnmarshalPageItems[transcripts.Snippet](page)
+				if err != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to parse snippets: %v", err)), nil
+				}
+				hasMore = page.HasNext
+				nextURL = page.NextPage
+			} else {
+				// First page
+				opts := &transcripts.SnippetListOptions{Max: PageSize}
+
+				page, pErr := client.Transcripts().ListSnippets(transcriptID, opts)
+				if pErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to list snippets: %v", pErr)), nil
+				}
+				snippetItems = page.Items
+				hasMore = page.HasNext
+				nextURL = page.NextPage
 			}
 
-			page, err := client.Transcripts().ListSnippets(transcriptID, opts)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("Failed to list snippets: %v", err)), nil
+			result, fErr := FormatPaginatedResponse(snippetItems, hasMore, nextURL)
+			if fErr != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to format response: %v", fErr)), nil
 			}
-
-			data, _ := json.MarshalIndent(page.Items, "", "  ")
-			return mcp.NewToolResultText(string(data)), nil
+			return mcp.NewToolResultText(result), nil
 		},
 	)
 

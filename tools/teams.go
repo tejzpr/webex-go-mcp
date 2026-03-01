@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/tejzpr/webex-go-mcp/auth"
 	"github.com/WebexCommunity/webex-go-sdk/v2/rooms"
 	"github.com/WebexCommunity/webex-go-sdk/v2/teammemberships"
 	"github.com/WebexCommunity/webex-go-sdk/v2/teams"
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/tejzpr/webex-go-mcp/auth"
 )
 
 // RegisterTeamTools registers all team-related MCP tools.
@@ -25,8 +25,9 @@ func RegisterTeamTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				"- 'What teams am I on?' -- Call this with no filters.\n"+
 				"- 'What rooms are in team X?' -- Use the teamId from this response with webex_rooms_list.\n"+
 				"\n"+
-				"RESPONSE: Enriched with creator name, room count, and a list of rooms (with titles) for each team -- so you don't need a follow-up call to see what's inside."),
-			mcp.WithNumber("max", mcp.Description("Maximum number of teams to return. Most users belong to a small number of teams.")),
+				"RESPONSE: Enriched with creator name, room count, and a list of rooms (with titles) for each team -- so you don't need a follow-up call to see what's inside."+
+				PaginationDescription),
+			mcp.WithString("cursor", mcp.Description(CursorParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			client, err := resolver(ctx)
@@ -34,22 +35,42 @@ func RegisterTeamTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
 			}
 
-			opts := &teams.ListOptions{}
+			cursor := req.GetString("cursor", "")
 
-			if v := req.GetInt("max", 0); v > 0 {
-				opts.Max = v
-			}
+			var teamItems []teams.Team
+			var hasMore bool
+			var nextURL string
 
-			page, err := client.Teams().List(opts)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("Failed to list teams: %v", err)), nil
+			if cursor != "" {
+				// Direct cursor navigation — O(1) API call
+				page, pErr := FetchPageFromCursor(client, cursor)
+				if pErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch page from cursor: %v", pErr)), nil
+				}
+				teamItems, err = UnmarshalPageItems[teams.Team](page)
+				if err != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to parse teams: %v", err)), nil
+				}
+				hasMore = page.HasNext
+				nextURL = page.NextPage
+			} else {
+				// First page
+				opts := &teams.ListOptions{Max: PageSize}
+
+				page, pErr := client.Teams().List(opts)
+				if pErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to list teams: %v", pErr)), nil
+				}
+				teamItems = page.Items
+				hasMore = page.HasNext
+				nextURL = page.NextPage
 			}
 
 			// Enrich each team
 			nameCache := NewPersonNameCache(client)
-			enrichedTeams := make([]map[string]interface{}, 0, len(page.Items))
+			enrichedTeams := make([]map[string]interface{}, 0, len(teamItems))
 
-			for _, team := range page.Items {
+			for _, team := range teamItems {
 				et := map[string]interface{}{
 					"team": team,
 				}
@@ -77,8 +98,11 @@ func RegisterTeamTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				enrichedTeams = append(enrichedTeams, et)
 			}
 
-			data, _ := json.MarshalIndent(enrichedTeams, "", "  ")
-			return mcp.NewToolResultText(string(data)), nil
+			result, fErr := FormatPaginatedResponse(enrichedTeams, hasMore, nextURL)
+			if fErr != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to format response: %v", fErr)), nil
+			}
+			return mcp.NewToolResultText(result), nil
 		},
 	)
 

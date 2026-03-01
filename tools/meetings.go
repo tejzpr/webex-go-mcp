@@ -72,7 +72,8 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				"\n"+
 				"RESPONSE: Enriched -- for each meeting with hasTranscription=true, the response includes transcript IDs and meetingIds so you can download transcripts directly with webex_transcripts_download. No extra calls needed.\n"+
 				"\n"+
-				"RESPONSE FIELDS: Each meeting includes title, start, end, meetingType, state, hostDisplayName, hostEmail, webLink (join URL), hasTranscription, hasRecording, and more."),
+				"RESPONSE FIELDS: Each meeting includes title, start, end, meetingType, state, hostDisplayName, hostEmail, webLink (join URL), hasTranscription, hasRecording, and more."+
+				PaginationDescription),
 			mcp.WithString("meetingType", mcp.Description("CRITICAL parameter that controls what type of meeting objects are returned:\n"+
 				"- 'scheduledMeeting': Upcoming scheduled occurrences. Use for 'meetings today', 'meetings this week', 'next meeting'.\n"+
 				"- 'meeting': Actual instances that started/ended. Use for 'past meetings', 'meetings last week', 'meetings with recordings'.\n"+
@@ -88,6 +89,7 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			mcp.WithString("meetingNumber", mcp.Description("Filter by the Webex meeting number (the numeric code used to join). Useful when the user provides a specific meeting number.")),
 			mcp.WithNumber("max", mcp.Description("Maximum number of meetings to return. Default varies by Webex API. Use 10-20 for searching, higher for comprehensive listing.")),
 			mcp.WithBoolean("current", mcp.Description("Set to true to get only currently active meetings. Default: false (gets meetings in date range).")),
+			mcp.WithString("cursor", mcp.Description(CursorParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			client, err := resolver(ctx)
@@ -95,57 +97,81 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
 			}
 
-			opts := &meetings.ListOptions{}
+			cursor := req.GetString("cursor", "")
 
-			if v := req.GetString("meetingType", ""); v != "" {
-				opts.MeetingType = v
-			}
-			if v := req.GetString("state", ""); v != "" {
-				opts.State = v
-			}
-			if v := req.GetString("scheduledType", ""); v != "" {
-				opts.ScheduledType = v
-			}
-			if v := req.GetString("from", ""); v != "" {
-				convertedFrom, err := validateAndConvertISO8601(v, "from")
-				if err != nil {
-					return mcp.NewToolResultError(err.Error()), nil
+			var meetingItems []meetings.Meeting
+			var hasMore bool
+			var nextURL string
+
+			if cursor != "" {
+				// Direct cursor navigation — O(1) API call
+				page, pErr := FetchPageFromCursor(client, cursor)
+				if pErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch page from cursor: %v", pErr)), nil
 				}
-				opts.From = convertedFrom
-			}
-			if v := req.GetString("to", ""); v != "" {
-				convertedTo, err := validateAndConvertISO8601(v, "to")
+				meetingItems, err = UnmarshalPageItems[meetings.Meeting](page)
 				if err != nil {
-					return mcp.NewToolResultError(err.Error()), nil
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to parse meetings: %v", err)), nil
 				}
-				opts.To = convertedTo
-			}
-			if v := req.GetString("hostEmail", ""); v != "" {
-				opts.HostEmail = v
-			}
-			if v := req.GetString("meetingNumber", ""); v != "" {
-				opts.MeetingNumber = v
-			}
-			if v := req.GetInt("max", 0); v > 0 {
-				opts.Max = v
+				hasMore = page.HasNext
+				nextURL = page.NextPage
+			} else {
+				// First page
+				opts := &meetings.ListOptions{}
+
+				if v := req.GetString("meetingType", ""); v != "" {
+					opts.MeetingType = v
+				}
+				if v := req.GetString("state", ""); v != "" {
+					opts.State = v
+				}
+				if v := req.GetString("scheduledType", ""); v != "" {
+					opts.ScheduledType = v
+				}
+				if v := req.GetString("from", ""); v != "" {
+					convertedFrom, err := validateAndConvertISO8601(v, "from")
+					if err != nil {
+						return mcp.NewToolResultError(err.Error()), nil
+					}
+					opts.From = convertedFrom
+				}
+				if v := req.GetString("to", ""); v != "" {
+					convertedTo, err := validateAndConvertISO8601(v, "to")
+					if err != nil {
+						return mcp.NewToolResultError(err.Error()), nil
+					}
+					opts.To = convertedTo
+				}
+				if v := req.GetString("hostEmail", ""); v != "" {
+					opts.HostEmail = v
+				}
+				if v := req.GetString("meetingNumber", ""); v != "" {
+					opts.MeetingNumber = v
+				}
+				if v := req.GetInt("max", 0); v > 0 {
+					opts.Max = v
+				}
+
+				// Handle current parameter
+				opts.Current = req.GetBool("current", false)
+
+				// Debug logging
+				log.Printf("[meetings] List options: %+v", opts)
+
+				page, lErr := client.Meetings().List(opts)
+				if lErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to list meetings: %v", lErr)), nil
+				}
+				meetingItems = page.Items
+				hasMore = page.HasNext
+				nextURL = page.NextPage
 			}
 
-			// Handle current parameter - default to false to get meetings in date range
-			opts.Current = req.GetBool("current", false)
-
-			// Debug logging
-			log.Printf("[meetings] List options: %+v", opts)
-
-			page, lErr := client.Meetings().List(opts)
-			if lErr != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("Failed to list meetings: %v", lErr)), nil
-			}
-
-			log.Printf("[meetings] Found %d meetings", len(page.Items))
+			log.Printf("[meetings] Found %d meetings", len(meetingItems))
 
 			// Enrich each meeting with additional information
-			enrichedMeetings := make([]map[string]interface{}, 0, len(page.Items))
-			for _, meeting := range page.Items {
+			enrichedMeetings := make([]map[string]interface{}, 0, len(meetingItems))
+			for _, meeting := range meetingItems {
 				em := map[string]interface{}{
 					"meeting": meeting,
 				}
@@ -220,8 +246,11 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				enrichedMeetings = append(enrichedMeetings, em)
 			}
 
-			data, _ := json.MarshalIndent(enrichedMeetings, "", "  ")
-			return mcp.NewToolResultText(string(data)), nil
+			result, fErr := FormatPaginatedResponse(enrichedMeetings, hasMore, nextURL)
+			if fErr != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to format response: %v", fErr)), nil
+			}
+			return mcp.NewToolResultText(result), nil
 		},
 	)
 
@@ -500,9 +529,10 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				"\n"+
 				"NOTE: This only works for meetings that have already started or ended (meetingType='meeting'). You need the meeting instance ID, not the series ID. Use webex_meetings_list with meetingType='meeting' to find past meeting instances.\n"+
 				"\n"+
-				"RESPONSE: Each participant includes displayName, email, joinedTime, leftTime, state (joined/left/end), host/coHost flags, and device info."),
+				"RESPONSE: Each participant includes displayName, email, joinedTime, leftTime, state (joined/left/end), host/coHost flags, and device info."+
+				PaginationDescription),
 			mcp.WithString("meetingId", mcp.Required(), mcp.Description("The meeting instance ID (not the series ID). Get this from webex_meetings_list with meetingType='meeting'.")),
-			mcp.WithNumber("max", mcp.Description("Maximum number of participants to return. Default varies by API.")),
+			mcp.WithString("cursor", mcp.Description(CursorParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			client, err := resolver(ctx)
@@ -515,20 +545,45 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 
-			opts := &meetings.ParticipantListOptions{
-				MeetingID: meetingID,
-			}
-			if v := req.GetInt("max", 0); v > 0 {
-				opts.Max = v
+			cursor := req.GetString("cursor", "")
+
+			var participantItems []meetings.Participant
+			var hasMore bool
+			var nextURL string
+
+			if cursor != "" {
+				// Direct cursor navigation — O(1) API call
+				page, pErr := FetchPageFromCursor(client, cursor)
+				if pErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch page from cursor: %v", pErr)), nil
+				}
+				participantItems, err = UnmarshalPageItems[meetings.Participant](page)
+				if err != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to parse participants: %v", err)), nil
+				}
+				hasMore = page.HasNext
+				nextURL = page.NextPage
+			} else {
+				// First page
+				opts := &meetings.ParticipantListOptions{
+					MeetingID: meetingID,
+					Max:       PageSize,
+				}
+
+				page, pErr := client.Meetings().ListParticipants(opts)
+				if pErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to list participants: %v", pErr)), nil
+				}
+				participantItems = page.Items
+				hasMore = page.HasNext
+				nextURL = page.NextPage
 			}
 
-			page, err := client.Meetings().ListParticipants(opts)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("Failed to list participants: %v", err)), nil
+			result, fErr := FormatPaginatedResponse(participantItems, hasMore, nextURL)
+			if fErr != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to format response: %v", fErr)), nil
 			}
-
-			data, _ := json.MarshalIndent(page.Items, "", "  ")
-			return mcp.NewToolResultText(string(data)), nil
+			return mcp.NewToolResultText(result), nil
 		},
 	)
 

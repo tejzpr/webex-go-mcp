@@ -26,7 +26,8 @@ func RegisterRecordingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				"\n"+
 				"DATE RANGE: If 'from' and 'to' are not specified, returns all accessible recordings. The from-to range can be used to filter by recording time.\n"+
 				"\n"+
-				"RESPONSE: Each recording includes download URLs, playback URLs, duration, file size, and metadata like topic, host email, and recording status."),
+				"RESPONSE: Each recording includes download URLs, playback URLs, duration, file size, and metadata like topic, host email, and recording status."+
+				PaginationDescription),
 			mcp.WithString("meetingId", mcp.Description("Filter to recordings for a specific meeting. Get the meetingId from webex_meetings_list (look for meetings where hasRecording=true) or from webex_meetings_get.")),
 			mcp.WithString("meetingSeriesId", mcp.Description("Filter to recordings for a specific meeting series (recurring meetings).")),
 			mcp.WithString("hostEmail", mcp.Description("Filter to recordings from meetings hosted by this email address.")),
@@ -37,7 +38,7 @@ func RegisterRecordingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			mcp.WithString("status", mcp.Description("Filter by recording status (e.g., 'available', 'processing', 'failed').")),
 			mcp.WithString("topic", mcp.Description("Filter by recording topic (meeting title).")),
 			mcp.WithString("format", mcp.Description("Filter by recording format (e.g., 'mp4', 'mp3', 'wav').")),
-			mcp.WithNumber("max", mcp.Description("Maximum number of recordings to return.")),
+			mcp.WithString("cursor", mcp.Description(CursorParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			client, err := resolver(ctx)
@@ -45,64 +46,84 @@ func RegisterRecordingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
 			}
 
-			opts := &recordings.ListOptions{}
+			cursor := req.GetString("cursor", "")
 
-			if v := req.GetString("meetingId", ""); v != "" {
-				opts.MeetingID = v
-			}
-			if v := req.GetString("meetingSeriesId", ""); v != "" {
-				opts.MeetingSeriesID = v
-			}
-			if v := req.GetString("hostEmail", ""); v != "" {
-				opts.HostEmail = v
-			}
-			if v := req.GetString("siteUrl", ""); v != "" {
-				opts.SiteURL = v
-			}
-			if v := req.GetString("from", ""); v != "" {
-				convertedFrom, err := validateAndConvertISO8601(v, "from")
-				if err != nil {
-					return mcp.NewToolResultError(err.Error()), nil
+			var recordingItems []recordings.Recording
+			var hasMore bool
+			var nextURL string
+
+			if cursor != "" {
+				// Direct cursor navigation — O(1) API call
+				page, pErr := FetchPageFromCursor(client, cursor)
+				if pErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch page from cursor: %v", pErr)), nil
 				}
-				opts.From = convertedFrom
-			}
-			if v := req.GetString("to", ""); v != "" {
-				convertedTo, err := validateAndConvertISO8601(v, "to")
+				recordingItems, err = UnmarshalPageItems[recordings.Recording](page)
 				if err != nil {
-					return mcp.NewToolResultError(err.Error()), nil
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to parse recordings: %v", err)), nil
 				}
-				opts.To = convertedTo
-			}
-			if v := req.GetString("serviceType", ""); v != "" {
-				opts.ServiceType = v
-			}
-			if v := req.GetString("status", ""); v != "" {
-				opts.Status = v
-			}
-			if v := req.GetString("topic", ""); v != "" {
-				opts.Topic = v
-			}
-			if v := req.GetString("format", ""); v != "" {
-				opts.Format = v
-			}
-			if v := req.GetInt("max", 0); v > 0 {
-				opts.Max = v
+				hasMore = page.HasNext
+				nextURL = page.NextPage
+			} else {
+				// First page
+				opts := &recordings.ListOptions{Max: PageSize}
+
+				if v := req.GetString("meetingId", ""); v != "" {
+					opts.MeetingID = v
+				}
+				if v := req.GetString("meetingSeriesId", ""); v != "" {
+					opts.MeetingSeriesID = v
+				}
+				if v := req.GetString("hostEmail", ""); v != "" {
+					opts.HostEmail = v
+				}
+				if v := req.GetString("siteUrl", ""); v != "" {
+					opts.SiteURL = v
+				}
+				if v := req.GetString("from", ""); v != "" {
+					convertedFrom, err := validateAndConvertISO8601(v, "from")
+					if err != nil {
+						return mcp.NewToolResultError(err.Error()), nil
+					}
+					opts.From = convertedFrom
+				}
+				if v := req.GetString("to", ""); v != "" {
+					convertedTo, err := validateAndConvertISO8601(v, "to")
+					if err != nil {
+						return mcp.NewToolResultError(err.Error()), nil
+					}
+					opts.To = convertedTo
+				}
+				if v := req.GetString("serviceType", ""); v != "" {
+					opts.ServiceType = v
+				}
+				if v := req.GetString("status", ""); v != "" {
+					opts.Status = v
+				}
+				if v := req.GetString("topic", ""); v != "" {
+					opts.Topic = v
+				}
+				if v := req.GetString("format", ""); v != "" {
+					opts.Format = v
+				}
+
+				// Debug logging
+				log.Printf("[recordings] List options: %+v", opts)
+
+				page, lErr := client.Recordings().List(opts)
+				if lErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to list recordings: %v", lErr)), nil
+				}
+				recordingItems = page.Items
+				hasMore = page.HasNext
+				nextURL = page.NextPage
 			}
 
-			// Debug logging
-			log.Printf("[recordings] List options: %+v", opts)
-
-			// Try using client.Recordings() like transcripts
-			page, lErr := client.Recordings().List(opts)
-			if lErr != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("Failed to list recordings: %v", lErr)), nil
-			}
-
-			log.Printf("[recordings] Found %d recordings", len(page.Items))
+			log.Printf("[recordings] Found %d recordings", len(recordingItems))
 
 			// Enrich each recording with additional information
-			enrichedRecordings := make([]map[string]interface{}, 0, len(page.Items))
-			for _, recording := range page.Items {
+			enrichedRecordings := make([]map[string]interface{}, 0, len(recordingItems))
+			for _, recording := range recordingItems {
 				er := map[string]interface{}{
 					"recording": recording,
 				}
@@ -196,8 +217,11 @@ func RegisterRecordingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				enrichedRecordings = append(enrichedRecordings, er)
 			}
 
-			data, _ := json.MarshalIndent(enrichedRecordings, "", "  ")
-			return mcp.NewToolResultText(string(data)), nil
+			result, fErr := FormatPaginatedResponse(enrichedRecordings, hasMore, nextURL)
+			if fErr != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to format response: %v", fErr)), nil
+			}
+			return mcp.NewToolResultText(result), nil
 		},
 	)
 
