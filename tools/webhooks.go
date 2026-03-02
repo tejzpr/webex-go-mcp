@@ -19,6 +19,7 @@ func RegisterWebhookTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				"\n"+
 				"RESPONSE: Each webhook shows its name, targetUrl, resource, event, filter, status (active/inactive), and creation date."+
 				PaginationDescription),
+			mcp.WithNumber("maxResults", mcp.Description(MaxResultsParamDescription)),
 			mcp.WithString("nextPageUrl", mcp.Description(NextPageUrlParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -28,13 +29,13 @@ func RegisterWebhookTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			}
 
 			nextPageUrl := req.GetString("nextPageUrl", "")
+			maxResults := ClampMaxResults(req)
 
 			var items []webhooks.Webhook
 			var hasNextPage bool
 			var nextURL string
 
 			if nextPageUrl != "" {
-				// Direct next-page navigation — O(1) API call
 				page, pErr := FetchPage(client, nextPageUrl)
 				if pErr != nil {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch next page: %v", pErr)), nil
@@ -46,7 +47,6 @@ func RegisterWebhookTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			} else {
-				// First page
 				opts := &webhooks.ListOptions{Max: PageSize}
 				page, pErr := client.Webhooks().List(opts)
 				if pErr != nil {
@@ -56,6 +56,8 @@ func RegisterWebhookTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			}
+
+			items, hasNextPage, nextURL, _ = AutoPaginate(items, hasNextPage, nextURL, client, maxResults)
 
 			result, fErr := FormatPaginatedResponse(items, hasNextPage, nextURL)
 			if fErr != nil {

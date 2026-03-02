@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"strings"
 
 	"github.com/WebexCommunity/webex-go-sdk/v2/recordings"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -38,6 +41,8 @@ func RegisterRecordingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			mcp.WithString("status", mcp.Description("Filter by recording status (e.g., 'available', 'processing', 'failed').")),
 			mcp.WithString("topic", mcp.Description("Filter by recording topic (meeting title).")),
 			mcp.WithString("format", mcp.Description("Filter by recording format (e.g., 'mp4', 'mp3', 'wav').")),
+			mcp.WithNumber("maxResults", mcp.Description(MaxResultsParamDescription)),
+			mcp.WithBoolean("compact", mcp.Description(CompactParamDescription)),
 			mcp.WithString("nextPageUrl", mcp.Description(NextPageUrlParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -47,13 +52,14 @@ func RegisterRecordingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			}
 
 			nextPageUrl := req.GetString("nextPageUrl", "")
+			maxResults := ClampMaxResults(req)
+			compact := req.GetBool("compact", false)
 
 			var recordingItems []recordings.Recording
 			var hasNextPage bool
 			var nextURL string
 
 			if nextPageUrl != "" {
-				// Direct next-page navigation — O(1) API call
 				page, pErr := FetchPage(client, nextPageUrl)
 				if pErr != nil {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch next page: %v", pErr)), nil
@@ -119,9 +125,10 @@ func RegisterRecordingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				nextURL = page.NextPage
 			}
 
+			recordingItems, hasNextPage, nextURL, _ = AutoPaginate(recordingItems, hasNextPage, nextURL, client, maxResults)
+
 			log.Printf("[recordings] Found %d recordings", len(recordingItems))
 
-			// Enrich each recording with additional information
 			enrichedRecordings := make([]map[string]interface{}, 0, len(recordingItems))
 			for _, recording := range recordingItems {
 				er := map[string]interface{}{
@@ -215,6 +222,10 @@ func RegisterRecordingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				}
 
 				enrichedRecordings = append(enrichedRecordings, er)
+			}
+
+			if compact {
+				enrichedRecordings = TrimSlice(enrichedRecordings, []string{"recording", "downloadUrl", "durationHuman", "sizeHuman", "status", "format"})
 			}
 
 			result, fErr := FormatPaginatedResponse(enrichedRecordings, hasNextPage, nextURL)
@@ -340,13 +351,9 @@ func RegisterRecordingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 	// webex_recordings_download
 	s.AddTool(
 		mcp.NewTool("webex_recordings_download",
-			mcp.WithDescription("Download a recording file content. Returns the actual file content for text-based formats or metadata for binary formats.\n"+
+			mcp.WithDescription("Download a recording file. Returns file content for text-based formats (txt, vtt, json); for binary formats (mp4, mp3, wav), returns download/playback URLs since binary content cannot be returned as text.\n"+
 				"\n"+
-				"SUPPORTED FORMATS:\n"+
-				"- Text formats (txt, json, xml, csv): Returns full file content\n"+
-				"- Binary formats (mp4, mp3, wav, etc.): Returns metadata with file information\n"+
-				"\n"+
-				"USAGE: Get recordingId from webex_recordings_list, then call this tool to download the actual recording file."),
+				"USAGE: Get recordingId from webex_recordings_list, then call this tool to access the recording file."),
 			mcp.WithString("recordingId", mcp.Required(), mcp.Description("The ID of the recording to download. Get this from webex_recordings_list.")),
 			mcp.WithString("format", mcp.Description("Optional format preference (e.g., 'mp4', 'mp3', 'txt'). If not specified, uses the recording's default format.")),
 		),
@@ -361,33 +368,83 @@ func RegisterRecordingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 
-			// First get recording details to check format
 			recording, err := client.Recordings().Get(recordingID)
 			if err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("Failed to get recording details: %v", err)), nil
 			}
 
-			// Determine the format to use
 			format := req.GetString("format", "")
 			if format == "" {
-				format = recording.Format // Use default format
+				format = recording.Format
 			}
 
-			log.Printf("[recordings] Downloading recording %s in format %s", recordingID, format)
+			downloadURL := recording.DownloadURL
+			if downloadURL == "" {
+				return mcp.NewToolResultError("Recording has no download URL available"), nil
+			}
 
-			// Try using client.Recordings() like transcripts
-			// Note: This might not exist, we'll need to check
-			// For now, return metadata since actual file download would require additional implementation
+			log.Printf("[recordings] Downloading recording %s (format=%s)", recordingID, format)
+
+			binaryFormats := map[string]bool{
+				"mp4": true, "mp3": true, "wav": true, "arf": true, "webm": true,
+				"m4a": true, "wma": true, "wmv": true, "mov": true, "flv": true,
+			}
+
+			if binaryFormats[strings.ToLower(format)] {
+				response := map[string]interface{}{
+					"recordingId": recordingID,
+					"format":      format,
+					"sizeBytes":   recording.SizeBytes,
+					"status":      recording.Status,
+					"downloadUrl": downloadURL,
+					"playbackUrl": recording.PlaybackURL,
+					"message":     "Binary recording format — use the downloadUrl to download the file directly.",
+				}
+				data, _ := json.MarshalIndent(response, "", "  ")
+				return mcp.NewToolResultText(string(data)), nil
+			}
+
+			resp, err := makeAuthenticatedRequest(client, http.MethodGet, downloadURL)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to download recording: %v", err)), nil
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				return mcp.NewToolResultError(fmt.Sprintf("Download returned HTTP %d", resp.StatusCode)), nil
+			}
+
+			ct := resp.Header.Get("Content-Type")
+			if !isTextContentType(ct) {
+				response := map[string]interface{}{
+					"recordingId": recordingID,
+					"format":      format,
+					"contentType": ct,
+					"downloadUrl": downloadURL,
+					"playbackUrl": recording.PlaybackURL,
+					"message":     "Content type is not text-based — use the downloadUrl to download the file directly.",
+				}
+				data, _ := json.MarshalIndent(response, "", "  ")
+				return mcp.NewToolResultText(string(data)), nil
+			}
+
+			limited := io.LimitReader(resp.Body, maxTextFileSize+1)
+			body, err := io.ReadAll(limited)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to read recording content: %v", err)), nil
+			}
+
+			content := string(body)
+			if len(body) > maxTextFileSize {
+				content = string(body[:maxTextFileSize]) + "\n... [truncated at 100KB] ..."
+			}
+
 			response := map[string]interface{}{
 				"recordingId": recordingID,
 				"format":      format,
-				"downloadUrl": recording.DownloadURL,
-				"playbackUrl": recording.PlaybackURL,
-				"sizeBytes":   recording.SizeBytes,
-				"status":      recording.Status,
-				"note":        "File download would be implemented here using the download URL",
+				"sizeBytes":   len(body),
+				"content":     content,
 			}
-
 			data, _ := json.MarshalIndent(response, "", "  ")
 			return mcp.NewToolResultText(string(data)), nil
 		},

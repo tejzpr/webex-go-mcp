@@ -4,13 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
+	webex "github.com/WebexCommunity/webex-go-sdk/v2"
 	"github.com/WebexCommunity/webex-go-sdk/v2/memberships"
 	"github.com/WebexCommunity/webex-go-sdk/v2/messages"
 	"github.com/WebexCommunity/webex-go-sdk/v2/rooms"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/tejzpr/webex-go-mcp/auth"
 )
+
+// Compact fields for rooms list
+var roomsCompactFields = []string{"room", "teamName", "memberCount"}
 
 // RegisterRoomTools registers all room/space-related MCP tools.
 func RegisterRoomTools(s ToolRegistrar, resolver auth.ClientResolver) {
@@ -38,6 +43,9 @@ func RegisterRoomTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			mcp.WithString("teamId", mcp.Description("Filter to only rooms that belong to this team. Get a teamId from webex_teams_list.")),
 			mcp.WithString("type", mcp.Description("Filter by room type. 'direct' = 1:1 conversations (room title is the other person's name). 'group' = named multi-person spaces. Omit to get both types.")),
 			mcp.WithString("sortBy", mcp.Description("Sort order: 'lastactivity' (most recently active first -- RECOMMENDED for finding recent conversations), 'created' (newest first), or 'id' (default, by room ID).")),
+			mcp.WithBoolean("enrich", mcp.Description("When true (default), enriches each room with team name, member count, and last message preview. Set to false for faster results when you only need room IDs/titles.")),
+			mcp.WithNumber("maxResults", mcp.Description(MaxResultsParamDescription)),
+			mcp.WithBoolean("compact", mcp.Description(CompactParamDescription)),
 			mcp.WithString("nextPageUrl", mcp.Description(NextPageUrlParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -47,13 +55,15 @@ func RegisterRoomTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			}
 
 			nextPageUrl := req.GetString("nextPageUrl", "")
+			enrich := req.GetBool("enrich", true)
+			maxResults := ClampMaxResults(req)
+			compact := req.GetBool("compact", false)
 
 			var roomItems []rooms.Room
 			var hasNextPage bool
 			var nextURL string
 
 			if nextPageUrl != "" {
-				// Direct next-page navigation — O(1) API call
 				page, pErr := FetchPage(client, nextPageUrl)
 				if pErr != nil {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch next page: %v", pErr)), nil
@@ -65,7 +75,6 @@ func RegisterRoomTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			} else {
-				// First page
 				opts := &rooms.ListOptions{Max: PageSize}
 
 				if v := req.GetString("teamId", ""); v != "" {
@@ -87,47 +96,20 @@ func RegisterRoomTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				nextURL = page.NextPage
 			}
 
-			// Enrich each room
-			teamCache := NewTeamNameCache(client)
-			enrichedRooms := make([]map[string]interface{}, 0, len(roomItems))
+			roomItems, hasNextPage, nextURL, _ = AutoPaginate(roomItems, hasNextPage, nextURL, client, maxResults)
 
-			for _, room := range roomItems {
-				er := map[string]interface{}{
-					"room": room,
+			enrichedRooms := make([]map[string]interface{}, len(roomItems))
+
+			if !enrich {
+				for i, room := range roomItems {
+					enrichedRooms[i] = map[string]interface{}{"room": room}
 				}
+			} else {
+				enrichRoomsConcurrently(client, roomItems, enrichedRooms)
+			}
 
-				// Enrich: team name
-				if room.TeamID != "" {
-					if name := teamCache.Resolve(room.TeamID); name != "" {
-						er["teamName"] = name
-					}
-				}
-
-				// Enrich: member count
-				if memberPage, mErr := client.Memberships().List(&memberships.ListOptions{
-					RoomID: room.ID,
-				}); mErr == nil {
-					er["memberCount"] = len(memberPage.Items)
-				}
-
-				// Enrich: last message preview
-				if msgPage, mErr := client.Messages().List(&messages.ListOptions{
-					RoomID: room.ID,
-					Max:    1,
-				}); mErr == nil && len(msgPage.Items) > 0 {
-					lastMsg := msgPage.Items[0]
-					preview := lastMsg.Text
-					if len(preview) > 200 {
-						preview = preview[:200] + "..."
-					}
-					senderName := lastMsg.PersonEmail
-					if senderName == "" {
-						senderName = lastMsg.PersonID
-					}
-					er["lastMessagePreview"] = fmt.Sprintf("%s: %s", senderName, preview)
-				}
-
-				enrichedRooms = append(enrichedRooms, er)
+			if compact {
+				enrichedRooms = TrimSlice(enrichedRooms, roomsCompactFields)
 			}
 
 			result, fErr := FormatPaginatedResponse(enrichedRooms, hasNextPage, nextURL)
@@ -207,12 +189,10 @@ func RegisterRoomTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				return mcp.NewToolResultError(fmt.Sprintf("Failed to get room: %v", err)), nil
 			}
 
-			// Build enriched response
 			response := map[string]interface{}{
 				"room": result,
 			}
 
-			// Enrich: team
 			if result.TeamID != "" {
 				if team, tErr := client.Teams().Get(result.TeamID); tErr == nil {
 					response["team"] = map[string]interface{}{
@@ -222,7 +202,6 @@ func RegisterRoomTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				}
 			}
 
-			// Enrich: creator
 			if name := resolvePersonName(client, result.CreatorID); name != "" {
 				response["creator"] = map[string]interface{}{
 					"id":          result.CreatorID,
@@ -230,7 +209,6 @@ func RegisterRoomTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				}
 			}
 
-			// Enrich: members (already includes personDisplayName)
 			if memberPage, mErr := client.Memberships().List(&memberships.ListOptions{
 				RoomID: roomID,
 			}); mErr == nil {
@@ -238,7 +216,6 @@ func RegisterRoomTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				response["memberCount"] = len(memberPage.Items)
 			}
 
-			// Enrich: recent messages with sender names
 			if msgPage, mErr := client.Messages().List(&messages.ListOptions{
 				RoomID: roomID,
 				Max:    5,
@@ -333,4 +310,55 @@ func RegisterRoomTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			return mcp.NewToolResultText("Room deleted successfully"), nil
 		},
 	)
+}
+
+const roomEnrichConcurrency = 5
+
+func enrichRoomsConcurrently(client *webex.WebexClient, roomItems []rooms.Room, out []map[string]interface{}) {
+	teamCache := NewTeamNameCache(client)
+	sem := make(chan struct{}, roomEnrichConcurrency)
+	var wg sync.WaitGroup
+
+	for i, room := range roomItems {
+		wg.Add(1)
+		go func(idx int, r rooms.Room) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			er := map[string]interface{}{"room": r}
+
+			if r.TeamID != "" {
+				if name := teamCache.Resolve(r.TeamID); name != "" {
+					er["teamName"] = name
+				}
+			}
+
+			if memberPage, mErr := client.Memberships().List(&memberships.ListOptions{
+				RoomID: r.ID,
+			}); mErr == nil {
+				er["memberCount"] = len(memberPage.Items)
+			}
+
+			if msgPage, mErr := client.Messages().List(&messages.ListOptions{
+				RoomID: r.ID,
+				Max:    1,
+			}); mErr == nil && len(msgPage.Items) > 0 {
+				lastMsg := msgPage.Items[0]
+				preview := lastMsg.Text
+				if len(preview) > 200 {
+					preview = preview[:200] + "..."
+				}
+				senderName := lastMsg.PersonEmail
+				if senderName == "" {
+					senderName = lastMsg.PersonID
+				}
+				er["lastMessagePreview"] = fmt.Sprintf("%s: %s", senderName, preview)
+			}
+
+			out[idx] = er
+		}(i, room)
+	}
+
+	wg.Wait()
 }

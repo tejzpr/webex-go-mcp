@@ -89,6 +89,8 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			mcp.WithString("meetingNumber", mcp.Description("Filter by the Webex meeting number (the numeric code used to join). Useful when the user provides a specific meeting number.")),
 			mcp.WithNumber("max", mcp.Description("Maximum number of meetings to return. Default varies by Webex API. Use 10-20 for searching, higher for comprehensive listing.")),
 			mcp.WithBoolean("current", mcp.Description("Set to true to get only currently active meetings. Default: false (gets meetings in date range).")),
+			mcp.WithNumber("maxResults", mcp.Description(MaxResultsParamDescription)),
+			mcp.WithBoolean("compact", mcp.Description(CompactParamDescription)),
 			mcp.WithString("nextPageUrl", mcp.Description(NextPageUrlParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -98,13 +100,14 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			}
 
 			nextPageUrl := req.GetString("nextPageUrl", "")
+			maxResults := ClampMaxResults(req)
+			compact := req.GetBool("compact", false)
 
 			var meetingItems []meetings.Meeting
 			var hasNextPage bool
 			var nextURL string
 
 			if nextPageUrl != "" {
-				// Direct next-page navigation — O(1) API call
 				page, pErr := FetchPage(client, nextPageUrl)
 				if pErr != nil {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch next page: %v", pErr)), nil
@@ -167,9 +170,10 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				nextURL = page.NextPage
 			}
 
+			meetingItems, hasNextPage, nextURL, _ = AutoPaginate(meetingItems, hasNextPage, nextURL, client, maxResults)
+
 			log.Printf("[meetings] Found %d meetings", len(meetingItems))
 
-			// Enrich each meeting with additional information
 			enrichedMeetings := make([]map[string]interface{}, 0, len(meetingItems))
 			for _, meeting := range meetingItems {
 				em := map[string]interface{}{
@@ -244,6 +248,10 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				}
 
 				enrichedMeetings = append(enrichedMeetings, em)
+			}
+
+			if compact {
+				enrichedMeetings = TrimSlice(enrichedMeetings, []string{"meeting", "hostName", "transcripts", "webLink"})
 			}
 
 			result, fErr := FormatPaginatedResponse(enrichedMeetings, hasNextPage, nextURL)
@@ -532,6 +540,7 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				"RESPONSE: Each participant includes displayName, email, joinedTime, leftTime, state (joined/left/end), host/coHost flags, and device info."+
 				PaginationDescription),
 			mcp.WithString("meetingId", mcp.Required(), mcp.Description("The meeting instance ID (not the series ID). Get this from webex_meetings_list with meetingType='meeting'.")),
+			mcp.WithNumber("maxResults", mcp.Description(MaxResultsParamDescription)),
 			mcp.WithString("nextPageUrl", mcp.Description(NextPageUrlParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -546,13 +555,13 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			}
 
 			nextPageUrl := req.GetString("nextPageUrl", "")
+			maxResults := ClampMaxResults(req)
 
 			var participantItems []meetings.Participant
 			var hasNextPage bool
 			var nextURL string
 
 			if nextPageUrl != "" {
-				// Direct next-page navigation — O(1) API call
 				page, pErr := FetchPage(client, nextPageUrl)
 				if pErr != nil {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch next page: %v", pErr)), nil
@@ -564,7 +573,6 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			} else {
-				// First page
 				opts := &meetings.ParticipantListOptions{
 					MeetingID: meetingID,
 					Max:       PageSize,
@@ -578,6 +586,8 @@ func RegisterMeetingTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			}
+
+			participantItems, hasNextPage, nextURL, _ = AutoPaginate(participantItems, hasNextPage, nextURL, client, maxResults)
 
 			result, fErr := FormatPaginatedResponse(participantItems, hasNextPage, nextURL)
 			if fErr != nil {

@@ -26,7 +26,7 @@ type FileInfo struct {
 
 // resolvePersonName returns the displayName for a personID, or "" on failure.
 func resolvePersonName(client *webex.WebexClient, personID string) string {
-	if personID == "" {
+	if client == nil || personID == "" {
 		return ""
 	}
 	person, err := client.People().Get(personID)
@@ -63,7 +63,7 @@ func resolveRoomInfo(client *webex.WebexClient, roomID string) *RoomInfo {
 
 // resolveTeamName returns the team name for a teamID, or "" on failure.
 func resolveTeamName(client *webex.WebexClient, teamID string) string {
-	if teamID == "" {
+	if client == nil || teamID == "" {
 		return ""
 	}
 	team, err := client.Teams().Get(teamID)

@@ -48,6 +48,7 @@ func main() {
 	rootCmd.Flags().String("tls-key", "", "Path to TLS key file (env: WEBEX_TLS_KEY)")
 	rootCmd.Flags().String("store", "memory", "Store backend: 'memory' (default), 'sqlite', or 'postgres' (env: WEBEX_STORE)")
 	rootCmd.Flags().String("store-dsn", "", "Store DSN for sqlite/postgres (env: WEBEX_STORE_DSN). SQLite: 'file:data.db', Postgres: 'postgres://user:pass@host:5432/db'")
+	rootCmd.Flags().String("cors-origins", "*", "Comma-separated list of allowed CORS origins (env: WEBEX_CORS_ORIGINS). Default '*' allows all.")
 
 	// Bind flags to viper
 	_ = viper.BindPFlag("mode", rootCmd.Flags().Lookup("mode"))
@@ -69,6 +70,7 @@ func main() {
 	_ = viper.BindPFlag("tls_key", rootCmd.Flags().Lookup("tls-key"))
 	_ = viper.BindPFlag("store", rootCmd.Flags().Lookup("store"))
 	_ = viper.BindPFlag("store_dsn", rootCmd.Flags().Lookup("store-dsn"))
+	_ = viper.BindPFlag("cors_origins", rootCmd.Flags().Lookup("cors-origins"))
 
 	// Bind environment variables
 	viper.SetEnvPrefix("WEBEX")
@@ -91,6 +93,7 @@ func main() {
 	_ = viper.BindEnv("tls_key", "WEBEX_TLS_KEY")
 	_ = viper.BindEnv("store", "WEBEX_STORE")
 	_ = viper.BindEnv("store_dsn", "WEBEX_STORE_DSN")
+	_ = viper.BindEnv("cors_origins", "WEBEX_CORS_ORIGINS")
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -155,6 +158,7 @@ func runHTTP(sdkConfig *webexsdk.Config, include, exclude string, minimal, reado
 	tlsKey := viper.GetString("tls_key")
 	storeType := viper.GetString("store")
 	storeDSN := viper.GetString("store_dsn")
+	corsOrigins := viper.GetString("cors_origins")
 
 	// Validate required HTTP mode config
 	if clientID == "" {
@@ -198,5 +202,6 @@ func runHTTP(sdkConfig *webexsdk.Config, include, exclude string, minimal, reado
 		Exclude:         exclude,
 		Minimal:         minimal,
 		ReadonlyMinimal: readonlyMinimal,
+		CORSOrigins:     corsOrigins,
 	})
 }

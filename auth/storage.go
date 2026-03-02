@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -19,7 +20,7 @@ type Store interface {
 	LookupToken(opaqueToken string) (*TokenRecord, bool)
 
 	// UpdateWebexToken updates the Webex tokens for an existing opaque token (after refresh).
-	UpdateWebexToken(opaqueToken, newAccessToken, newRefreshToken string, expiresIn int)
+	UpdateWebexToken(opaqueToken, newAccessToken, newRefreshToken string, expiresIn int) error
 
 	// RevokeToken removes an opaque token.
 	RevokeToken(opaqueToken string)
@@ -27,7 +28,7 @@ type Store interface {
 	// --- Authorization codes ---
 
 	// StoreAuthCode persists an authorization code record.
-	StoreAuthCode(record *AuthCodeRecord)
+	StoreAuthCode(record *AuthCodeRecord) error
 
 	// ConsumeAuthCode retrieves and deletes an authorization code (one-time use).
 	ConsumeAuthCode(code string) (*AuthCodeRecord, bool)
@@ -35,7 +36,7 @@ type Store interface {
 	// --- Pending auth state ---
 
 	// StorePendingAuth persists a pending authorization state.
-	StorePendingAuth(pending *PendingAuth)
+	StorePendingAuth(pending *PendingAuth) error
 
 	// ConsumePendingAuth retrieves and deletes a pending auth by state (one-time use).
 	ConsumePendingAuth(state string) (*PendingAuth, bool)
@@ -46,7 +47,7 @@ type Store interface {
 	RegisterClient(req *RegistrationRequest) (*RegisteredClient, error)
 
 	// RegisterClientWithID registers (or updates) a client with a known client_id.
-	RegisterClientWithID(clientID, redirectURI string)
+	RegisterClientWithID(clientID, redirectURI string) error
 
 	// LookupClient retrieves a registered client by client_id.
 	LookupClient(clientID string) (*RegisteredClient, bool)
@@ -96,4 +97,64 @@ func NewStore(cfg StoreConfig) (Store, error) {
 	default:
 		return nil, fmt.Errorf("unknown store type %q: must be 'memory', 'sqlite', or 'postgres'", cfg.Type)
 	}
+}
+
+// prepareClientRegistration builds a RegisteredClient from a RegistrationRequest,
+// generating a client_id, optional client_secret, and applying defaults.
+// This is shared logic used by all Store implementations.
+func prepareClientRegistration(req *RegistrationRequest) (*RegisteredClient, error) {
+	clientID, err := generateSecureToken(16)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate client_id: %w", err)
+	}
+
+	var clientSecret string
+	authMethod := req.TokenEndpointAuthMethod
+	if authMethod == "" {
+		authMethod = "none"
+	}
+	if authMethod == "client_secret_post" || authMethod == "client_secret_basic" {
+		clientSecret, err = generateSecureToken(32)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate client_secret: %w", err)
+		}
+	}
+
+	grantTypes := req.GrantTypes
+	if len(grantTypes) == 0 {
+		grantTypes = []string{"authorization_code"}
+	}
+	responseTypes := req.ResponseTypes
+	if len(responseTypes) == 0 {
+		responseTypes = []string{"code"}
+	}
+
+	return &RegisteredClient{
+		ClientID:                clientID,
+		ClientSecret:            clientSecret,
+		RedirectURIs:            req.RedirectURIs,
+		ClientName:              req.ClientName,
+		TokenEndpointAuthMethod: authMethod,
+		GrantTypes:              grantTypes,
+		ResponseTypes:           responseTypes,
+		CreatedAt:               time.Now(),
+	}, nil
+}
+
+// matchesRedirectURI checks if target is present in the uris slice.
+func matchesRedirectURI(uris []string, target string) bool {
+	for _, uri := range uris {
+		if uri == target {
+			return true
+		}
+	}
+	return false
+}
+
+// marshalClientJSON returns the JSON-encoded redirect URIs, grant types, and response types for DB storage.
+func marshalClientJSON(client *RegisteredClient) (redirectURIs, grantTypes, responseTypes string) {
+	r, _ := json.Marshal(client.RedirectURIs)
+	g, _ := json.Marshal(client.GrantTypes)
+	rt, _ := json.Marshal(client.ResponseTypes)
+	return string(r), string(g), string(rt)
 }

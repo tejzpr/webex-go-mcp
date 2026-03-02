@@ -15,6 +15,12 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
+// eventHandler pairs an event type name with its handler function for cleanup.
+type eventHandler struct {
+	eventType string
+	handler   func(*conversation.Activity)
+}
+
 // Subscription represents an active Mercury event subscription.
 type Subscription struct {
 	ID        string
@@ -23,6 +29,7 @@ type Subscription struct {
 	SessionID string
 	CreatedAt time.Time
 	cancel    context.CancelFunc
+	handlers  []eventHandler
 }
 
 // MercuryManager manages per-user Mercury connections and multiplexes
@@ -99,31 +106,27 @@ func (m *MercuryManager) Subscribe(
 	m.subscriptions[subID] = sub
 	m.mu.Unlock()
 
-	// Register event handlers for the requested event types
+	// Register event handlers for the requested event types, storing refs for cleanup
 	for _, eventType := range eventTypes {
 		et := eventType // capture
-		uc.convClient.On(et, func(activity *conversation.Activity) {
-			// Check if subscription is still active
+		handler := func(activity *conversation.Activity) {
 			select {
 			case <-subCtx.Done():
 				return
 			default:
 			}
 
-			// Filter by room ID if specified
 			if roomID != "" && activity.Target != nil && activity.Target.ID != roomID {
-				// Also check GlobalID since Mercury may use internal IDs
 				if activity.Target.GlobalID != roomID {
 					return
 				}
 			}
 
-			// Build the notification payload
 			payload := m.buildEventPayload(sub, et, activity)
-
-			// Send as MCP notification
 			m.sendNotification(sessionID, payload)
-		})
+		}
+		uc.convClient.On(et, handler)
+		sub.handlers = append(sub.handlers, eventHandler{eventType: et, handler: handler})
 	}
 
 	// Ensure Mercury is connected
@@ -158,12 +161,17 @@ func (m *MercuryManager) Unsubscribe(subscriptionID string) error {
 	// Cancel the subscription context
 	sub.cancel()
 
-	// Decrement ref count and potentially disconnect
+	// Remove registered event handlers
 	m.mu.RLock()
 	uc, ok := m.userConns[sub.TokenHash]
 	m.mu.RUnlock()
 
 	if ok {
+		for _, h := range sub.handlers {
+			uc.convClient.Off(h.eventType, h.handler)
+		}
+		sub.handlers = nil
+
 		uc.mu.Lock()
 		uc.refCount--
 		if uc.refCount <= 0 {

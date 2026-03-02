@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/tejzpr/webex-go-mcp/auth"
@@ -53,6 +54,7 @@ func registerTools(resolver auth.ClientResolver, include, exclude string, minima
 	tools.RegisterMeetingTools(registrar, resolver)
 	tools.RegisterTranscriptTools(registrar, resolver)
 	tools.RegisterWebhookTools(registrar, resolver)
+	tools.RegisterPaginationTools(registrar, resolver)
 
 	// Register streaming tools only when MercuryManager is available (HTTP mode)
 	if mercuryMgr != nil {
@@ -87,6 +89,7 @@ type HTTPServerConfig struct {
 	Exclude         string
 	Minimal         bool
 	ReadonlyMinimal bool
+	CORSOrigins     string
 }
 
 // requestLoggingMiddleware logs every incoming HTTP request for debugging.
@@ -101,9 +104,31 @@ func requestLoggingMiddleware(next http.Handler) http.Handler {
 }
 
 // corsMiddleware adds CORS headers to all responses.
-func corsMiddleware(next http.Handler) http.Handler {
+// allowedOrigins is a comma-separated string. If it contains "*", all origins are allowed.
+func corsMiddleware(allowedOrigins string, next http.Handler) http.Handler {
+	var allowAll bool
+	originSet := make(map[string]struct{})
+	for _, o := range strings.Split(allowedOrigins, ",") {
+		o = strings.TrimSpace(o)
+		if o == "*" {
+			allowAll = true
+		}
+		if o != "" {
+			originSet[o] = struct{}{}
+		}
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		if allowAll {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		} else if origin != "" {
+			if _, ok := originSet[origin]; ok {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Vary", "Origin")
+			}
+		}
+
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Mcp-Session-Id")
 		w.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id")
@@ -140,6 +165,7 @@ func startHTTPServer(cfg *HTTPServerConfig) error {
 	log.Printf("Using %s store", cfg.StoreConfig.Type)
 
 	clientCache := auth.NewClientCache(15*time.Minute, cfg.WebexSDKConfig)
+	defer clientCache.Close()
 
 	// Create OAuth handler
 	oauthHandler := auth.NewOAuthHandler(cfg.OAuthConfig, store)
@@ -199,7 +225,11 @@ func startHTTPServer(cfg *HTTPServerConfig) error {
 	mux.Handle("/mcp", authMiddleware.Wrap(streamableServer))
 
 	// Wrap with logging and CORS
-	handler := requestLoggingMiddleware(corsMiddleware(mux))
+	corsOrigins := cfg.CORSOrigins
+	if corsOrigins == "" {
+		corsOrigins = "*"
+	}
+	handler := requestLoggingMiddleware(corsMiddleware(corsOrigins, mux))
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 

@@ -78,20 +78,21 @@ type cachedClient struct {
 
 // ClientCache caches *webex.WebexClient instances keyed by token hash.
 type ClientCache struct {
-	mu      sync.RWMutex
-	entries map[string]*cachedClient
-	ttl     time.Duration
-	config  *webexsdk.Config
+	mu          sync.RWMutex
+	entries     map[string]*cachedClient
+	ttl         time.Duration
+	config      *webexsdk.Config
+	stopCleanup chan struct{}
 }
 
 // NewClientCache creates a new client cache with the given TTL and SDK config.
 func NewClientCache(ttl time.Duration, config *webexsdk.Config) *ClientCache {
 	cc := &ClientCache{
-		entries: make(map[string]*cachedClient),
-		ttl:     ttl,
-		config:  config,
+		entries:     make(map[string]*cachedClient),
+		ttl:         ttl,
+		config:      config,
+		stopCleanup: make(chan struct{}),
 	}
-	// Start background cleanup
 	go cc.cleanup()
 	return cc
 }
@@ -131,19 +132,29 @@ func (cc *ClientCache) Evict(accessToken string) {
 	cc.mu.Unlock()
 }
 
+// Close stops the background cleanup goroutine.
+func (cc *ClientCache) Close() {
+	close(cc.stopCleanup)
+}
+
 // cleanup periodically removes expired entries.
 func (cc *ClientCache) cleanup() {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
-	for range ticker.C {
-		cc.mu.Lock()
-		now := time.Now()
-		for k, v := range cc.entries {
-			if now.After(v.expiresAt) {
-				delete(cc.entries, k)
+	for {
+		select {
+		case <-cc.stopCleanup:
+			return
+		case <-ticker.C:
+			cc.mu.Lock()
+			now := time.Now()
+			for k, v := range cc.entries {
+				if now.After(v.expiresAt) {
+					delete(cc.entries, k)
+				}
 			}
+			cc.mu.Unlock()
 		}
-		cc.mu.Unlock()
 	}
 }
 

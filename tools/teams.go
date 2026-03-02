@@ -12,6 +12,9 @@ import (
 	"github.com/tejzpr/webex-go-mcp/auth"
 )
 
+// Compact fields for teams list
+var teamsCompactFields = []string{"team", "creatorName", "roomCount"}
+
 // RegisterTeamTools registers all team-related MCP tools.
 func RegisterTeamTools(s ToolRegistrar, resolver auth.ClientResolver) {
 	// webex_teams_list
@@ -27,6 +30,8 @@ func RegisterTeamTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				"\n"+
 				"RESPONSE: Enriched with creator name, room count, and a list of rooms (with titles) for each team -- so you don't need a follow-up call to see what's inside."+
 				PaginationDescription),
+			mcp.WithNumber("maxResults", mcp.Description(MaxResultsParamDescription)),
+			mcp.WithBoolean("compact", mcp.Description(CompactParamDescription)),
 			mcp.WithString("nextPageUrl", mcp.Description(NextPageUrlParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -36,13 +41,14 @@ func RegisterTeamTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			}
 
 			nextPageUrl := req.GetString("nextPageUrl", "")
+			maxResults := ClampMaxResults(req)
+			compact := req.GetBool("compact", false)
 
 			var teamItems []teams.Team
 			var hasNextPage bool
 			var nextURL string
 
 			if nextPageUrl != "" {
-				// Direct next-page navigation — O(1) API call
 				page, pErr := FetchPage(client, nextPageUrl)
 				if pErr != nil {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch next page: %v", pErr)), nil
@@ -54,7 +60,6 @@ func RegisterTeamTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			} else {
-				// First page
 				opts := &teams.ListOptions{Max: PageSize}
 
 				page, pErr := client.Teams().List(opts)
@@ -66,7 +71,8 @@ func RegisterTeamTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				nextURL = page.NextPage
 			}
 
-			// Enrich each team
+			teamItems, hasNextPage, nextURL, _ = AutoPaginate(teamItems, hasNextPage, nextURL, client, maxResults)
+
 			nameCache := NewPersonNameCache(client)
 			enrichedTeams := make([]map[string]interface{}, 0, len(teamItems))
 
@@ -75,12 +81,10 @@ func RegisterTeamTools(s ToolRegistrar, resolver auth.ClientResolver) {
 					"team": team,
 				}
 
-				// Enrich: creator name
 				if name := nameCache.Resolve(team.CreatorID); name != "" {
 					et["creatorName"] = name
 				}
 
-				// Enrich: rooms for this team
 				if roomPage, rErr := client.Rooms().List(&rooms.ListOptions{
 					TeamID: team.ID,
 				}); rErr == nil {
@@ -96,6 +100,10 @@ func RegisterTeamTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				}
 
 				enrichedTeams = append(enrichedTeams, et)
+			}
+
+			if compact {
+				enrichedTeams = TrimSlice(enrichedTeams, teamsCompactFields)
 			}
 
 			result, fErr := FormatPaginatedResponse(enrichedTeams, hasNextPage, nextURL)
@@ -173,12 +181,10 @@ func RegisterTeamTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				return mcp.NewToolResultError(fmt.Sprintf("Failed to get team: %v", err)), nil
 			}
 
-			// Build enriched response
 			response := map[string]interface{}{
 				"team": result,
 			}
 
-			// Enrich: creator
 			if result.CreatorID != "" {
 				if person, pErr := client.People().Get(result.CreatorID); pErr == nil {
 					response["creator"] = map[string]interface{}{
@@ -189,7 +195,6 @@ func RegisterTeamTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				}
 			}
 
-			// Enrich: rooms for this team
 			if roomPage, rErr := client.Rooms().List(&rooms.ListOptions{
 				TeamID: teamID,
 			}); rErr == nil {
@@ -197,7 +202,6 @@ func RegisterTeamTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				response["roomCount"] = len(roomPage.Items)
 			}
 
-			// Enrich: team members
 			if memberPage, mErr := client.TeamMemberships().List(&teammemberships.ListOptions{
 				TeamID: teamID,
 			}); mErr == nil {

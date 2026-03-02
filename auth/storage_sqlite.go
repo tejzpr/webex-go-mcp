@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -80,7 +81,8 @@ func createSQLiteTables(db *sql.DB) error {
 			code TEXT PRIMARY KEY,
 			client_id TEXT NOT NULL,
 			redirect_uri TEXT NOT NULL,
-			code_verifier TEXT,
+			code_challenge TEXT,
+			code_challenge_method TEXT,
 			webex_access_token TEXT NOT NULL,
 			webex_refresh_token TEXT NOT NULL,
 			webex_expires_in INTEGER NOT NULL,
@@ -156,12 +158,16 @@ func (s *SQLiteStore) LookupToken(opaqueToken string) (*TokenRecord, bool) {
 	return &r, true
 }
 
-func (s *SQLiteStore) UpdateWebexToken(opaqueToken, newAccessToken, newRefreshToken string, expiresIn int) {
+func (s *SQLiteStore) UpdateWebexToken(opaqueToken, newAccessToken, newRefreshToken string, expiresIn int) error {
 	expiresAt := time.Now().Add(time.Duration(expiresIn) * time.Second)
-	s.db.Exec(
+	_, err := s.db.Exec(
 		`UPDATE tokens SET webex_access_token = ?, webex_refresh_token = ?, expires_at = ? WHERE opaque_token = ?`,
 		newAccessToken, newRefreshToken, expiresAt, opaqueToken,
 	)
+	if err != nil {
+		return fmt.Errorf("failed to update webex token: %w", err)
+	}
+	return nil
 }
 
 func (s *SQLiteStore) RevokeToken(opaqueToken string) {
@@ -170,14 +176,18 @@ func (s *SQLiteStore) RevokeToken(opaqueToken string) {
 
 // --- Authorization codes ---
 
-func (s *SQLiteStore) StoreAuthCode(record *AuthCodeRecord) {
-	s.db.Exec(
-		`INSERT INTO auth_codes (code, client_id, redirect_uri, code_verifier, webex_access_token, webex_refresh_token, webex_expires_in, created_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		record.Code, record.ClientID, record.RedirectURI, record.CodeVerifier,
+func (s *SQLiteStore) StoreAuthCode(record *AuthCodeRecord) error {
+	_, err := s.db.Exec(
+		`INSERT INTO auth_codes (code, client_id, redirect_uri, code_challenge, code_challenge_method, webex_access_token, webex_refresh_token, webex_expires_in, created_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		record.Code, record.ClientID, record.RedirectURI, record.CodeChallenge, record.CodeChallengeMethod,
 		record.WebexAccessToken, record.WebexRefreshToken, record.WebexExpiresIn,
 		record.CreatedAt, record.ExpiresAt,
 	)
+	if err != nil {
+		return fmt.Errorf("failed to store auth code: %w", err)
+	}
+	return nil
 }
 
 func (s *SQLiteStore) ConsumeAuthCode(code string) (*AuthCodeRecord, bool) {
@@ -188,15 +198,22 @@ func (s *SQLiteStore) ConsumeAuthCode(code string) (*AuthCodeRecord, bool) {
 	defer tx.Rollback()
 
 	row := tx.QueryRow(
-		`SELECT code, client_id, redirect_uri, code_verifier, webex_access_token, webex_refresh_token, webex_expires_in, created_at, expires_at
+		`SELECT code, client_id, redirect_uri, code_challenge, code_challenge_method, webex_access_token, webex_refresh_token, webex_expires_in, created_at, expires_at
 		 FROM auth_codes WHERE code = ?`, code,
 	)
 
 	var r AuthCodeRecord
-	if err := row.Scan(&r.Code, &r.ClientID, &r.RedirectURI, &r.CodeVerifier,
+	var codeChallenge, codeChallengeMethod sql.NullString
+	if err := row.Scan(&r.Code, &r.ClientID, &r.RedirectURI, &codeChallenge, &codeChallengeMethod,
 		&r.WebexAccessToken, &r.WebexRefreshToken, &r.WebexExpiresIn,
 		&r.CreatedAt, &r.ExpiresAt); err != nil {
 		return nil, false
+	}
+	if codeChallenge.Valid {
+		r.CodeChallenge = codeChallenge.String
+	}
+	if codeChallengeMethod.Valid {
+		r.CodeChallengeMethod = codeChallengeMethod.String
 	}
 
 	tx.Exec(`DELETE FROM auth_codes WHERE code = ?`, code)
@@ -210,13 +227,17 @@ func (s *SQLiteStore) ConsumeAuthCode(code string) (*AuthCodeRecord, bool) {
 
 // --- Pending auth state ---
 
-func (s *SQLiteStore) StorePendingAuth(pending *PendingAuth) {
-	s.db.Exec(
+func (s *SQLiteStore) StorePendingAuth(pending *PendingAuth) error {
+	_, err := s.db.Exec(
 		`INSERT INTO pending_auths (state, client_id, client_redirect_uri, client_state, code_challenge, code_challenge_method, webex_code_verifier, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		pending.State, pending.ClientID, pending.ClientRedirectURI, pending.ClientState,
 		pending.CodeChallenge, pending.CodeChallengeMethod, pending.WebexCodeVerifier, pending.CreatedAt,
 	)
+	if err != nil {
+		return fmt.Errorf("failed to store pending auth: %w", err)
+	}
+	return nil
 }
 
 func (s *SQLiteStore) ConsumePendingAuth(state string) (*PendingAuth, bool) {
@@ -259,52 +280,18 @@ func (s *SQLiteStore) ConsumePendingAuth(state string) (*PendingAuth, bool) {
 // --- Client registry ---
 
 func (s *SQLiteStore) RegisterClient(req *RegistrationRequest) (*RegisteredClient, error) {
-	clientID, err := generateSecureToken(16)
+	client, err := prepareClientRegistration(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate client_id: %w", err)
+		return nil, err
 	}
 
-	var clientSecret string
-	authMethod := req.TokenEndpointAuthMethod
-	if authMethod == "" {
-		authMethod = "none"
-	}
-	if authMethod == "client_secret_post" || authMethod == "client_secret_basic" {
-		clientSecret, err = generateSecureToken(32)
-		if err != nil {
-			return nil, fmt.Errorf("failed to generate client_secret: %w", err)
-		}
-	}
-
-	grantTypes := req.GrantTypes
-	if len(grantTypes) == 0 {
-		grantTypes = []string{"authorization_code"}
-	}
-	responseTypes := req.ResponseTypes
-	if len(responseTypes) == 0 {
-		responseTypes = []string{"code"}
-	}
-
-	client := &RegisteredClient{
-		ClientID:                clientID,
-		ClientSecret:            clientSecret,
-		RedirectURIs:            req.RedirectURIs,
-		ClientName:              req.ClientName,
-		TokenEndpointAuthMethod: authMethod,
-		GrantTypes:              grantTypes,
-		ResponseTypes:           responseTypes,
-		CreatedAt:               time.Now(),
-	}
-
-	redirectURIsJSON, _ := json.Marshal(client.RedirectURIs)
-	grantTypesJSON, _ := json.Marshal(client.GrantTypes)
-	responseTypesJSON, _ := json.Marshal(client.ResponseTypes)
+	redirectURIsJSON, grantTypesJSON, responseTypesJSON := marshalClientJSON(client)
 
 	_, err = s.db.Exec(
 		`INSERT INTO clients (client_id, client_secret, redirect_uris, client_name, token_endpoint_auth_method, grant_types, response_types, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		client.ClientID, client.ClientSecret, string(redirectURIsJSON), client.ClientName,
-		client.TokenEndpointAuthMethod, string(grantTypesJSON), string(responseTypesJSON), client.CreatedAt,
+		client.ClientID, client.ClientSecret, redirectURIsJSON, client.ClientName,
+		client.TokenEndpointAuthMethod, grantTypesJSON, responseTypesJSON, client.CreatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to store client: %w", err)
@@ -313,30 +300,34 @@ func (s *SQLiteStore) RegisterClient(req *RegistrationRequest) (*RegisteredClien
 	return client, nil
 }
 
-func (s *SQLiteStore) RegisterClientWithID(clientID, redirectURI string) {
-	// Try to get existing client
+func (s *SQLiteStore) RegisterClientWithID(clientID, redirectURI string) error {
 	existing, ok := s.LookupClient(clientID)
 	if ok {
-		for _, uri := range existing.RedirectURIs {
-			if uri == redirectURI {
-				return
-			}
+		if matchesRedirectURI(existing.RedirectURIs, redirectURI) {
+			return nil
 		}
 		existing.RedirectURIs = append(existing.RedirectURIs, redirectURI)
 		redirectURIsJSON, _ := json.Marshal(existing.RedirectURIs)
-		s.db.Exec(`UPDATE clients SET redirect_uris = ? WHERE client_id = ?`, string(redirectURIsJSON), clientID)
-		return
+		_, err := s.db.Exec(`UPDATE clients SET redirect_uris = ? WHERE client_id = ?`, string(redirectURIsJSON), clientID)
+		if err != nil {
+			return fmt.Errorf("failed to update client redirect URIs: %w", err)
+		}
+		return nil
 	}
 
 	redirectURIs, _ := json.Marshal([]string{redirectURI})
 	grantTypes, _ := json.Marshal([]string{"authorization_code"})
 	responseTypes, _ := json.Marshal([]string{"code"})
 
-	s.db.Exec(
+	_, err := s.db.Exec(
 		`INSERT OR IGNORE INTO clients (client_id, redirect_uris, token_endpoint_auth_method, grant_types, response_types, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		clientID, string(redirectURIs), "none", string(grantTypes), string(responseTypes), time.Now(),
 	)
+	if err != nil {
+		return fmt.Errorf("failed to register client with ID: %w", err)
+	}
+	return nil
 }
 
 func (s *SQLiteStore) LookupClient(clientID string) (*RegisteredClient, bool) {
@@ -372,12 +363,7 @@ func (s *SQLiteStore) ValidateRedirectURI(clientID, redirectURI string) bool {
 	if !ok {
 		return false
 	}
-	for _, uri := range client.RedirectURIs {
-		if uri == redirectURI {
-			return true
-		}
-	}
-	return false
+	return matchesRedirectURI(client.RedirectURIs, redirectURI)
 }
 
 // --- Lifecycle ---
@@ -396,8 +382,12 @@ func (s *SQLiteStore) cleanup(interval time.Duration) {
 			return
 		case <-ticker.C:
 			now := time.Now()
-			s.db.Exec(`DELETE FROM auth_codes WHERE expires_at < ?`, now)
-			s.db.Exec(`DELETE FROM pending_auths WHERE created_at < ?`, now.Add(-10*time.Minute))
+			if _, err := s.db.Exec(`DELETE FROM auth_codes WHERE expires_at < ?`, now); err != nil {
+				log.Printf("[SQLiteStore] cleanup: failed to delete expired auth codes: %v", err)
+			}
+			if _, err := s.db.Exec(`DELETE FROM pending_auths WHERE created_at < ?`, now.Add(-10*time.Minute)); err != nil {
+				log.Printf("[SQLiteStore] cleanup: failed to delete expired pending auths: %v", err)
+			}
 		}
 	}
 }

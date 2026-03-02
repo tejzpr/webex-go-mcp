@@ -77,7 +77,11 @@ func (oh *OAuthHandler) HandleAuthorize(w http.ResponseWriter, r *http.Request) 
 	// auto-register it with the provided redirect_uri so the flow can proceed.
 	if !oh.store.ValidateRedirectURI(clientID, redirectURI) {
 		log.Printf("[OAuth] /authorize: client_id=%s not in registry, auto-registering with redirect_uri=%s", clientID, redirectURI)
-		oh.store.RegisterClientWithID(clientID, redirectURI)
+		if err := oh.store.RegisterClientWithID(clientID, redirectURI); err != nil {
+			log.Printf("[OAuth] /authorize: failed to auto-register client: %v", err)
+			writeJSONError(w, http.StatusInternalServerError, "server_error", "Failed to register client")
+			return
+		}
 	}
 
 	// Generate our internal state to correlate the Webex callback
@@ -96,7 +100,7 @@ func (oh *OAuthHandler) HandleAuthorize(w http.ResponseWriter, r *http.Request) 
 	webexCodeChallenge := generateS256Challenge(webexCodeVerifier)
 
 	// Store pending auth
-	oh.store.StorePendingAuth(&PendingAuth{
+	if err := oh.store.StorePendingAuth(&PendingAuth{
 		State:               internalState,
 		ClientID:            clientID,
 		ClientRedirectURI:   redirectURI,
@@ -105,7 +109,11 @@ func (oh *OAuthHandler) HandleAuthorize(w http.ResponseWriter, r *http.Request) 
 		CodeChallengeMethod: codeChallengeMethod,
 		WebexCodeVerifier:   webexCodeVerifier,
 		CreatedAt:           time.Now(),
-	})
+	}); err != nil {
+		log.Printf("[OAuth] /authorize: failed to store pending auth: %v", err)
+		writeJSONError(w, http.StatusInternalServerError, "server_error", "Failed to store authorization state")
+		return
+	}
 
 	// Build Webex authorization URL
 	webexParams := url.Values{
@@ -173,18 +181,23 @@ func (oh *OAuthHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store the auth code record
-	oh.store.StoreAuthCode(&AuthCodeRecord{
-		Code:              ourCode,
-		ClientID:          pending.ClientID,
-		RedirectURI:       pending.ClientRedirectURI,
-		CodeVerifier:      "", // Will be validated from the client's PKCE if provided
-		WebexAccessToken:  webexTokens.AccessToken,
-		WebexRefreshToken: webexTokens.RefreshToken,
-		WebexExpiresIn:    webexTokens.ExpiresIn,
-		CreatedAt:         time.Now(),
-		ExpiresAt:         time.Now().Add(5 * time.Minute),
-	})
+	// Store the auth code record (propagate PKCE challenge for validation at /token)
+	if err := oh.store.StoreAuthCode(&AuthCodeRecord{
+		Code:                ourCode,
+		ClientID:            pending.ClientID,
+		RedirectURI:         pending.ClientRedirectURI,
+		CodeChallenge:       pending.CodeChallenge,
+		CodeChallengeMethod: pending.CodeChallengeMethod,
+		WebexAccessToken:    webexTokens.AccessToken,
+		WebexRefreshToken:   webexTokens.RefreshToken,
+		WebexExpiresIn:      webexTokens.ExpiresIn,
+		CreatedAt:           time.Now(),
+		ExpiresAt:           time.Now().Add(5 * time.Minute),
+	}); err != nil {
+		log.Printf("[OAuth] /callback: failed to store auth code: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 
 	// Redirect back to the MCP client's redirect_uri with our auth code
 	clientRedirect, _ := url.Parse(pending.ClientRedirectURI)
@@ -294,10 +307,21 @@ func (oh *OAuthHandler) handleAuthCodeExchange(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Validate PKCE if the client sent a code_challenge during /authorize
-	// We look up the pending auth's code_challenge info from the auth code record
-	// For simplicity, we trust the flow since we control both sides
-	_ = codeVerifier // PKCE validation would go here for full spec compliance
+	// Validate PKCE: if a code_challenge was provided during /authorize, the client
+	// must now prove possession of the code_verifier.
+	if record.CodeChallenge != "" {
+		if codeVerifier == "" {
+			log.Printf("[OAuth] /token auth_code: FAILED - code_challenge was set but no code_verifier provided")
+			writeJSONError(w, http.StatusBadRequest, "invalid_grant", "code_verifier is required when code_challenge was provided")
+			return
+		}
+		if !validatePKCE(record.CodeChallenge, record.CodeChallengeMethod, codeVerifier) {
+			log.Printf("[OAuth] /token auth_code: FAILED - PKCE verification failed")
+			writeJSONError(w, http.StatusBadRequest, "invalid_grant", "PKCE verification failed")
+			return
+		}
+		log.Printf("[OAuth] /token auth_code: PKCE verification passed (method=%s)", record.CodeChallengeMethod)
+	}
 
 	// Store the Webex tokens and issue our opaque token
 	opaqueToken, err := oh.store.StoreToken(
@@ -349,7 +373,11 @@ func (oh *OAuthHandler) handleRefreshToken(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Update the stored tokens
-	oh.store.UpdateWebexToken(refreshToken, newTokens.AccessToken, newTokens.RefreshToken, newTokens.ExpiresIn)
+	if err := oh.store.UpdateWebexToken(refreshToken, newTokens.AccessToken, newTokens.RefreshToken, newTokens.ExpiresIn); err != nil {
+		log.Printf("[OAuth] /token refresh: failed to update stored tokens: %v", err)
+		writeJSONError(w, http.StatusInternalServerError, "server_error", "Failed to update token")
+		return
+	}
 
 	resp := map[string]interface{}{
 		"access_token": refreshToken, // Same opaque token, updated Webex tokens behind it
@@ -435,7 +463,9 @@ func (oh *OAuthHandler) RefreshWebexTokenForRecord(record *TokenRecord) (string,
 	if err != nil {
 		return "", err
 	}
-	oh.store.UpdateWebexToken(record.OpaqueToken, newTokens.AccessToken, newTokens.RefreshToken, newTokens.ExpiresIn)
+	if err := oh.store.UpdateWebexToken(record.OpaqueToken, newTokens.AccessToken, newTokens.RefreshToken, newTokens.ExpiresIn); err != nil {
+		return "", fmt.Errorf("failed to update stored token: %w", err)
+	}
 	return newTokens.AccessToken, nil
 }
 
@@ -443,6 +473,19 @@ func (oh *OAuthHandler) RefreshWebexTokenForRecord(record *TokenRecord) (string,
 func generateS256Challenge(verifier string) string {
 	h := sha256.Sum256([]byte(verifier))
 	return base64.RawURLEncoding.EncodeToString(h[:])
+}
+
+// validatePKCE checks that the code_verifier matches the stored code_challenge
+// using the specified method (S256 or plain).
+func validatePKCE(challenge, method, verifier string) bool {
+	switch method {
+	case "S256", "":
+		return generateS256Challenge(verifier) == challenge
+	case "plain":
+		return verifier == challenge
+	default:
+		return false
+	}
 }
 
 // BuildWWWAuthenticate builds the WWW-Authenticate header value for 401 responses.

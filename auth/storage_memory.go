@@ -63,7 +63,7 @@ func (ms *MemoryStore) LookupToken(opaqueToken string) (*TokenRecord, bool) {
 	return record, true
 }
 
-func (ms *MemoryStore) UpdateWebexToken(opaqueToken, newAccessToken, newRefreshToken string, expiresIn int) {
+func (ms *MemoryStore) UpdateWebexToken(opaqueToken, newAccessToken, newRefreshToken string, expiresIn int) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 	if record, ok := ms.tokens[opaqueToken]; ok {
@@ -71,6 +71,7 @@ func (ms *MemoryStore) UpdateWebexToken(opaqueToken, newAccessToken, newRefreshT
 		record.WebexRefreshToken = newRefreshToken
 		record.ExpiresAt = time.Now().Add(time.Duration(expiresIn) * time.Second)
 	}
+	return nil
 }
 
 func (ms *MemoryStore) RevokeToken(opaqueToken string) {
@@ -81,10 +82,11 @@ func (ms *MemoryStore) RevokeToken(opaqueToken string) {
 
 // --- Authorization codes ---
 
-func (ms *MemoryStore) StoreAuthCode(record *AuthCodeRecord) {
+func (ms *MemoryStore) StoreAuthCode(record *AuthCodeRecord) error {
 	ms.mu.Lock()
 	ms.authCodes[record.Code] = record
 	ms.mu.Unlock()
+	return nil
 }
 
 func (ms *MemoryStore) ConsumeAuthCode(code string) (*AuthCodeRecord, bool) {
@@ -103,10 +105,11 @@ func (ms *MemoryStore) ConsumeAuthCode(code string) (*AuthCodeRecord, bool) {
 
 // --- Pending auth state ---
 
-func (ms *MemoryStore) StorePendingAuth(pending *PendingAuth) {
+func (ms *MemoryStore) StorePendingAuth(pending *PendingAuth) error {
 	ms.mu.Lock()
 	ms.pendingAuths[pending.State] = pending
 	ms.mu.Unlock()
+	return nil
 }
 
 func (ms *MemoryStore) ConsumePendingAuth(state string) (*PendingAuth, bool) {
@@ -126,62 +129,28 @@ func (ms *MemoryStore) ConsumePendingAuth(state string) (*PendingAuth, bool) {
 // --- Client registry ---
 
 func (ms *MemoryStore) RegisterClient(req *RegistrationRequest) (*RegisteredClient, error) {
-	clientID, err := generateSecureToken(16)
+	client, err := prepareClientRegistration(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate client_id: %w", err)
-	}
-
-	var clientSecret string
-	authMethod := req.TokenEndpointAuthMethod
-	if authMethod == "" {
-		authMethod = "none"
-	}
-	if authMethod == "client_secret_post" || authMethod == "client_secret_basic" {
-		clientSecret, err = generateSecureToken(32)
-		if err != nil {
-			return nil, fmt.Errorf("failed to generate client_secret: %w", err)
-		}
-	}
-
-	grantTypes := req.GrantTypes
-	if len(grantTypes) == 0 {
-		grantTypes = []string{"authorization_code"}
-	}
-	responseTypes := req.ResponseTypes
-	if len(responseTypes) == 0 {
-		responseTypes = []string{"code"}
-	}
-
-	client := &RegisteredClient{
-		ClientID:                clientID,
-		ClientSecret:            clientSecret,
-		RedirectURIs:            req.RedirectURIs,
-		ClientName:              req.ClientName,
-		TokenEndpointAuthMethod: authMethod,
-		GrantTypes:              grantTypes,
-		ResponseTypes:           responseTypes,
-		CreatedAt:               time.Now(),
+		return nil, err
 	}
 
 	ms.mu.Lock()
-	ms.clients[clientID] = client
+	ms.clients[client.ClientID] = client
 	ms.mu.Unlock()
 
 	return client, nil
 }
 
-func (ms *MemoryStore) RegisterClientWithID(clientID, redirectURI string) {
+func (ms *MemoryStore) RegisterClientWithID(clientID, redirectURI string) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 
 	if existing, ok := ms.clients[clientID]; ok {
-		for _, uri := range existing.RedirectURIs {
-			if uri == redirectURI {
-				return
-			}
+		if matchesRedirectURI(existing.RedirectURIs, redirectURI) {
+			return nil
 		}
 		existing.RedirectURIs = append(existing.RedirectURIs, redirectURI)
-		return
+		return nil
 	}
 
 	ms.clients[clientID] = &RegisteredClient{
@@ -192,6 +161,7 @@ func (ms *MemoryStore) RegisterClientWithID(clientID, redirectURI string) {
 		ResponseTypes:           []string{"code"},
 		CreatedAt:               time.Now(),
 	}
+	return nil
 }
 
 func (ms *MemoryStore) LookupClient(clientID string) (*RegisteredClient, bool) {
@@ -208,12 +178,7 @@ func (ms *MemoryStore) ValidateRedirectURI(clientID, redirectURI string) bool {
 	if !ok {
 		return false
 	}
-	for _, uri := range client.RedirectURIs {
-		if uri == redirectURI {
-			return true
-		}
-	}
-	return false
+	return matchesRedirectURI(client.RedirectURIs, redirectURI)
 }
 
 // --- Lifecycle ---

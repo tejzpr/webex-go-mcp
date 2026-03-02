@@ -22,15 +22,16 @@ type TokenRecord struct {
 
 // AuthCodeRecord holds a pending authorization code awaiting exchange.
 type AuthCodeRecord struct {
-	Code              string    `json:"code"`
-	ClientID          string    `json:"client_id"`
-	RedirectURI       string    `json:"redirect_uri"`
-	CodeVerifier      string    `json:"code_verifier,omitempty"`
-	WebexAccessToken  string    `json:"webex_access_token"`
-	WebexRefreshToken string    `json:"webex_refresh_token"`
-	WebexExpiresIn    int       `json:"webex_expires_in"`
-	CreatedAt         time.Time `json:"created_at"`
-	ExpiresAt         time.Time `json:"expires_at"`
+	Code                string    `json:"code"`
+	ClientID            string    `json:"client_id"`
+	RedirectURI         string    `json:"redirect_uri"`
+	CodeChallenge       string    `json:"code_challenge,omitempty"`
+	CodeChallengeMethod string    `json:"code_challenge_method,omitempty"`
+	WebexAccessToken    string    `json:"webex_access_token"`
+	WebexRefreshToken   string    `json:"webex_refresh_token"`
+	WebexExpiresIn      int       `json:"webex_expires_in"`
+	CreatedAt           time.Time `json:"created_at"`
+	ExpiresAt           time.Time `json:"expires_at"`
 }
 
 // PendingAuth holds state for an in-flight OAuth authorization request.

@@ -32,6 +32,8 @@ func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			mcp.WithString("roomId", mcp.Required(), mcp.Description("The ID of the room/space to list messages from. Get this from webex_rooms_list, or from a previous API response.")),
 			mcp.WithString("mentionedPeople", mcp.Description("Filter to only messages that mention specific people. Use the special value 'me' to find messages that mention the authenticated user. Otherwise pass a personId.")),
 			mcp.WithString("before", mcp.Description("List messages sent before this date/time (ISO 8601 format, e.g. '2026-02-01T00:00:00Z'). Useful for searching messages in a date range.")),
+			mcp.WithNumber("maxResults", mcp.Description(MaxResultsParamDescription)),
+			mcp.WithBoolean("compact", mcp.Description(CompactParamDescription)),
 			mcp.WithString("nextPageUrl", mcp.Description(NextPageUrlParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -46,13 +48,14 @@ func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			}
 
 			nextPageUrl := req.GetString("nextPageUrl", "")
+			maxResults := ClampMaxResults(req)
+			compact := req.GetBool("compact", false)
 
 			var msgItems []messages.Message
 			var hasNextPage bool
 			var nextURL string
 
 			if nextPageUrl != "" {
-				// Direct next-page navigation — O(1) API call
 				page, pErr := FetchPage(client, nextPageUrl)
 				if pErr != nil {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch next page: %v", pErr)), nil
@@ -64,7 +67,6 @@ func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			} else {
-				// First page
 				opts := &messages.ListOptions{
 					RoomID: roomID,
 					Max:    PageSize,
@@ -86,68 +88,64 @@ func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				nextURL = page.NextPage
 			}
 
-			// Build enriched response
+			msgItems, hasNextPage, nextURL, _ = AutoPaginate(msgItems, hasNextPage, nextURL, client, maxResults)
+
 			response := make(map[string]interface{})
 
-			// Enrich: room context
 			if roomInfo := resolveRoomInfo(client, roomID); roomInfo != nil {
 				response["room"] = roomInfo
 			}
 
-			// Enrich: sender names (deduplicated) + file metadata per message
 			nameCache := NewPersonNameCache(client)
 			enrichedMessages := make([]map[string]interface{}, 0, len(msgItems))
 			for _, msg := range msgItems {
 				em := map[string]interface{}{
 					"id":          msg.ID,
-					"roomId":      msg.RoomID,
 					"text":        msg.Text,
 					"personId":    msg.PersonID,
+					"senderName":  nameCache.Resolve(msg.PersonID),
 					"personEmail": msg.PersonEmail,
 					"created":     msg.Created,
 				}
 
-				if msg.Markdown != "" {
-					em["markdown"] = msg.Markdown
-				}
-				if msg.HTML != "" {
-					em["html"] = msg.HTML
-				}
-				if msg.ParentID != "" {
-					em["parentId"] = msg.ParentID
-				}
-				if msg.Updated != nil {
-					em["updated"] = msg.Updated
-				}
-				if len(msg.MentionedPeople) > 0 {
-					em["mentionedPeople"] = msg.MentionedPeople
-				}
-				if len(msg.MentionedGroups) > 0 {
-					em["mentionedGroups"] = msg.MentionedGroups
-				}
-
-				// Enrich: sender display name
-				if name := nameCache.Resolve(msg.PersonID); name != "" {
-					em["senderName"] = name
-				}
-
-				// Enrich: file metadata (HEAD only for list, no content download)
-				if len(msg.Files) > 0 {
-					fileInfos := make([]*FileInfo, 0, len(msg.Files))
-					for _, fileURL := range msg.Files {
-						if fi := resolveFileMetadata(client, fileURL); fi != nil {
-							fileInfos = append(fileInfos, fi)
-						}
+				if !compact {
+					em["roomId"] = msg.RoomID
+					if msg.Markdown != "" {
+						em["markdown"] = msg.Markdown
 					}
-					if len(fileInfos) > 0 {
-						em["files"] = fileInfos
+					if msg.HTML != "" {
+						em["html"] = msg.HTML
+					}
+					if msg.ParentID != "" {
+						em["parentId"] = msg.ParentID
+					}
+					if msg.Updated != nil {
+						em["updated"] = msg.Updated
+					}
+					if len(msg.MentionedPeople) > 0 {
+						em["mentionedPeople"] = msg.MentionedPeople
+					}
+					if len(msg.MentionedGroups) > 0 {
+						em["mentionedGroups"] = msg.MentionedGroups
+					}
+
+					if len(msg.Files) > 0 {
+						fileInfos := make([]*FileInfo, 0, len(msg.Files))
+						for _, fileURL := range msg.Files {
+							if fi := resolveFileMetadata(client, fileURL); fi != nil {
+								fileInfos = append(fileInfos, fi)
+							}
+						}
+						if len(fileInfos) > 0 {
+							em["files"] = fileInfos
+						}
 					}
 				}
 
 				enrichedMessages = append(enrichedMessages, em)
 			}
 			response["messages"] = enrichedMessages
-			AddPaginationToMap(response, hasNextPage, nextURL)
+			AddPaginationToMap(response, len(enrichedMessages), hasNextPage, nextURL)
 
 			data, _ := json.MarshalIndent(response, "", "  ")
 			return mcp.NewToolResultText(string(data)), nil

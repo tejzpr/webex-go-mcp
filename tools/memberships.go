@@ -10,6 +10,9 @@ import (
 	"github.com/tejzpr/webex-go-mcp/auth"
 )
 
+// Compact fields for memberships list
+var membershipsCompactFields = []string{"id", "personDisplayName", "personEmail", "isModerator"}
+
 // RegisterMembershipTools registers all membership-related MCP tools.
 func RegisterMembershipTools(s ToolRegistrar, resolver auth.ClientResolver) {
 	// webex_memberships_list
@@ -29,6 +32,8 @@ func RegisterMembershipTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			mcp.WithString("roomId", mcp.Description("Filter to members of this specific room. Returns all people in the room with display names and emails.")),
 			mcp.WithString("personId", mcp.Description("Filter to memberships for this specific person ID. Returns all rooms this person is in.")),
 			mcp.WithString("personEmail", mcp.Description("Filter to memberships for this person by email (e.g. 'alice@example.com'). Returns all rooms this person is in. This is the easiest way to find what rooms someone belongs to.")),
+			mcp.WithNumber("maxResults", mcp.Description(MaxResultsParamDescription)),
+			mcp.WithBoolean("compact", mcp.Description(CompactParamDescription)),
 			mcp.WithString("nextPageUrl", mcp.Description(NextPageUrlParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -39,13 +44,14 @@ func RegisterMembershipTools(s ToolRegistrar, resolver auth.ClientResolver) {
 
 			roomID := req.GetString("roomId", "")
 			nextPageUrl := req.GetString("nextPageUrl", "")
+			maxResults := ClampMaxResults(req)
+			compact := req.GetBool("compact", false)
 
 			var memberItems []memberships.Membership
 			var hasNextPage bool
 			var nextURL string
 
 			if nextPageUrl != "" {
-				// Direct next-page navigation — O(1) API call
 				page, pErr := FetchPage(client, nextPageUrl)
 				if pErr != nil {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch next page: %v", pErr)), nil
@@ -57,7 +63,6 @@ func RegisterMembershipTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			} else {
-				// First page
 				opts := &memberships.ListOptions{Max: PageSize}
 
 				if roomID != "" {
@@ -79,19 +84,32 @@ func RegisterMembershipTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				nextURL = page.NextPage
 			}
 
-			// Build enriched response
-			response := map[string]interface{}{
-				"memberships": memberItems,
+			memberItems, hasNextPage, nextURL, _ = AutoPaginate(memberItems, hasNextPage, nextURL, client, maxResults)
+
+			response := map[string]interface{}{}
+
+			if compact {
+				compactItems := make([]map[string]interface{}, len(memberItems))
+				for i, m := range memberItems {
+					compactItems[i] = map[string]interface{}{
+						"id":                m.ID,
+						"personDisplayName": m.PersonDisplayName,
+						"personEmail":       m.PersonEmail,
+						"isModerator":       m.IsModerator,
+					}
+				}
+				response["memberships"] = compactItems
+			} else {
+				response["memberships"] = memberItems
 			}
 
-			// Enrich: room title when roomId is provided
 			if roomID != "" {
 				if roomInfo := resolveRoomInfo(client, roomID); roomInfo != nil {
 					response["room"] = roomInfo
 				}
 			}
 
-			AddPaginationToMap(response, hasNextPage, nextURL)
+			AddPaginationToMap(response, len(memberItems), hasNextPage, nextURL)
 
 			data, _ := json.MarshalIndent(response, "", "  ")
 			return mcp.NewToolResultText(string(data)), nil

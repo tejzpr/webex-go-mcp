@@ -37,6 +37,8 @@ func RegisterTranscriptTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			mcp.WithString("siteUrl", mcp.Description("Filter by Webex site URL. Usually not needed unless the user has multiple Webex sites.")),
 			mcp.WithString("from", mcp.Description("Start of date range (UTC format: '2026-01-01T00:00:00Z'). Defaults to 30 days ago. The from-to range must be within 30 days.")),
 			mcp.WithString("to", mcp.Description("End of date range (UTC format: '2026-02-06T23:59:59Z'). Defaults to now. The from-to range must be within 30 days.")),
+			mcp.WithNumber("maxResults", mcp.Description(MaxResultsParamDescription)),
+			mcp.WithBoolean("compact", mcp.Description(CompactParamDescription)),
 			mcp.WithString("nextPageUrl", mcp.Description(NextPageUrlParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -46,6 +48,8 @@ func RegisterTranscriptTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			}
 
 			nextPageUrl := req.GetString("nextPageUrl", "")
+			maxResults := ClampMaxResults(req)
+			compact := req.GetBool("compact", false)
 
 			var transcriptItems []transcripts.Transcript
 			var hasNextPage bool
@@ -100,7 +104,8 @@ func RegisterTranscriptTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				nextURL = page.NextPage
 			}
 
-			// Enrich each transcript with meeting title and snippet preview
+			transcriptItems, hasNextPage, nextURL, _ = AutoPaginate(transcriptItems, hasNextPage, nextURL, client, maxResults)
+
 			enrichedTranscripts := make([]map[string]interface{}, 0, len(transcriptItems))
 			for _, t := range transcriptItems {
 				et := map[string]interface{}{
@@ -141,6 +146,10 @@ func RegisterTranscriptTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				}
 
 				enrichedTranscripts = append(enrichedTranscripts, et)
+			}
+
+			if compact {
+				enrichedTranscripts = TrimSlice(enrichedTranscripts, []string{"transcript", "meetingTitle"})
 			}
 
 			result, fErr := FormatPaginatedResponse(enrichedTranscripts, hasNextPage, nextURL)
@@ -211,6 +220,7 @@ func RegisterTranscriptTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				"TIP: webex_transcripts_list already includes the first 3 snippets as a preview. Use this tool only if you need more snippets or the full conversation in structured form. For the complete transcript as plain text, use webex_transcripts_download instead."+
 				PaginationDescription),
 			mcp.WithString("transcriptId", mcp.Required(), mcp.Description("The transcript ID. Get this from webex_transcripts_list ('id' field in each transcript).")),
+			mcp.WithNumber("maxResults", mcp.Description(MaxResultsParamDescription)),
 			mcp.WithString("nextPageUrl", mcp.Description(NextPageUrlParamDescription)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -225,13 +235,13 @@ func RegisterTranscriptTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			}
 
 			nextPageUrl := req.GetString("nextPageUrl", "")
+			maxResults := ClampMaxResults(req)
 
 			var snippetItems []transcripts.Snippet
 			var hasNextPage bool
 			var nextURL string
 
 			if nextPageUrl != "" {
-				// Direct next-page navigation — O(1) API call
 				page, pErr := FetchPage(client, nextPageUrl)
 				if pErr != nil {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch next page: %v", pErr)), nil
@@ -243,7 +253,6 @@ func RegisterTranscriptTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			} else {
-				// First page
 				opts := &transcripts.SnippetListOptions{Max: PageSize}
 
 				page, pErr := client.Transcripts().ListSnippets(transcriptID, opts)
@@ -254,6 +263,8 @@ func RegisterTranscriptTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				hasNextPage = page.HasNext
 				nextURL = page.NextPage
 			}
+
+			snippetItems, hasNextPage, nextURL, _ = AutoPaginate(snippetItems, hasNextPage, nextURL, client, maxResults)
 
 			result, fErr := FormatPaginatedResponse(snippetItems, hasNextPage, nextURL)
 			if fErr != nil {

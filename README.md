@@ -11,16 +11,18 @@ A Go-based [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) serv
 - **Transparent token refresh**: Automatically refreshes expired Webex tokens
 - **Multi-user support**: Each authenticated user gets their own Webex API context
 
-**35 MCP tools** across 7 Webex API resource categories:
+**44 MCP tools** across 9 Webex API resource categories:
 
 | Category | Tools | Operations |
 |---|---|---|
-| **Messages** | 5 | List, create, send attachment, get, delete messages |
+| **Messages** | 6 | List, create, send attachment, send adaptive card, get, delete messages |
 | **Rooms** | 5 | List, create, get, update, delete rooms/spaces |
 | **Teams** | 4 | List, create, get, update teams |
 | **Memberships** | 4 | List, create, update, delete room memberships |
-| **Meetings** | 6 | List, create, get, update, delete meetings; list participants |
+| **Meetings** | 8 | List, create, get, update, patch, delete meetings; list participants, get participant |
 | **Transcripts** | 5 | List transcripts, download content, list/get/update snippets |
+| **Recordings** | 3 | List, get, download recordings |
+| **Streaming** | 4 | Subscribe, unsubscribe, wait_for_message, list_subscriptions |
 | **Webhooks** | 5 | List, create, get, update, delete webhooks |
 
 ## Prerequisites
@@ -70,6 +72,7 @@ Configuration is loaded via environment variables and/or CLI flags. CLI flags ta
 | `WEBEX_PORT` | `--port` | No | `8080` | HTTP server port |
 | `WEBEX_TLS_CERT` | `--tls-cert` | No | - | Path to TLS certificate file |
 | `WEBEX_TLS_KEY` | `--tls-key` | No | - | Path to TLS key file |
+| `WEBEX_CORS_ORIGINS` | `--cors-origins` | No | `*` | Comma-separated list of allowed CORS origins |
 
 ### Tool Filtering
 
@@ -83,26 +86,28 @@ The `category:action` shorthand maps to the full tool name `webex_{category}_{ac
 - If `--include` is set, only the specified tools are registered.
 - If `--exclude` is set, all tools except the specified ones are registered.
 - If both are set, `--include` takes priority and `--exclude` is ignored.
-- If neither is set, all 34 tools are registered (default).
+- If neither is set, all 44 tools are registered (default).
 
 **Available categories and actions:**
 
 | Category | Actions |
 |---|---|
-| `messages` | `list`, `create`, `send_attachment`, `get`, `delete` |
+| `messages` | `list`, `create`, `send_attachment`, `send_adaptive_card`, `get`, `delete` |
 | `rooms` | `list`, `create`, `get`, `update`, `delete` |
 | `teams` | `list`, `create`, `get`, `update` |
 | `memberships` | `list`, `create`, `update`, `delete` |
-| `meetings` | `list`, `create`, `get`, `update`, `delete`, `list_participants` |
+| `meetings` | `list`, `create`, `get`, `update`, `patch`, `delete`, `list_participants`, `get_participant` |
 | `transcripts` | `list`, `download`, `list_snippets`, `get_snippet`, `update_snippet` |
+| `recordings` | `list`, `get`, `download` |
+| `streaming` | `subscribe_room_messages`, `unsubscribe`, `wait_for_message`, `list_subscriptions` |
 | `webhooks` | `list`, `create`, `get`, `update`, `delete` |
 
 #### Preset Flags
 
 For convenience, two preset flags are available that automatically add a curated set of tools to the `--include` list:
 
-- **`--minimal`** -- All operations for messages, rooms, teams, meetings, and transcripts (excludes memberships and webhooks). **24 tools.**
-- **`--readonly-minimal`** -- Only read/list/get operations for messages, rooms, teams, meetings, and transcripts. No create, update, or delete. **12 tools.**
+- **`--minimal`** -- All operations for messages, rooms, teams, meetings, transcripts, and streaming (excludes memberships and webhooks). **30 tools.**
+- **`--readonly-minimal`** -- Only read/list/get operations for messages, rooms, teams, meetings, transcripts, and streaming. No create, update, or delete. **17 tools.**
 
 These flags **merge** with `--include` -- they don't override it. For example, `--minimal --include "webhooks:list"` registers the minimal set plus `webhooks:list`. If both `--minimal` and `--readonly-minimal` are set, `--minimal` takes priority.
 
@@ -317,6 +322,7 @@ Add to your Cursor MCP configuration (`.cursor/mcp.json` in your project or `~/.
 - **`webex_messages_list`** -- List messages in a room (requires `roomId`). Enriched with room context, sender names, and file metadata.
 - **`webex_messages_create`** -- Send a text message. To DM someone, just pass `toPersonEmail` -- no room lookup needed. For group spaces, use `roomId`.
 - **`webex_messages_send_attachment`** -- Send a message with a file attachment (public URL). Same destination options as create.
+- **`webex_messages_send_adaptive_card`** -- Send an Adaptive Card to a room or person.
 - **`webex_messages_get`** -- Get a message by ID. Enriched with sender profile, room info, and file content (text files inline).
 - **`webex_messages_delete`** -- Delete a message by ID
 
@@ -348,8 +354,10 @@ Add to your Cursor MCP configuration (`.cursor/mcp.json` in your project or `~/.
 - **`webex_meetings_create`** -- Schedule a meeting with optional invitees (`title`, `start`, `end` required; `invitees` accepts comma-separated emails)
 - **`webex_meetings_get`** -- Get meeting details by ID
 - **`webex_meetings_update`** -- Update a meeting
+- **`webex_meetings_patch`** -- Partially update a meeting (PATCH semantics)
 - **`webex_meetings_delete`** -- Cancel/delete a meeting
 - **`webex_meetings_list_participants`** -- List who actually attended a past meeting (join/leave times, host status, devices)
+- **`webex_meetings_get_participant`** -- Get a specific participant by ID
 
 ### Transcripts
 
@@ -358,6 +366,19 @@ Add to your Cursor MCP configuration (`.cursor/mcp.json` in your project or `~/.
 - **`webex_transcripts_list_snippets`** -- List spoken segments from a transcript
 - **`webex_transcripts_get_snippet`** -- Get a specific transcript snippet
 - **`webex_transcripts_update_snippet`** -- Update/correct a transcript snippet's text
+
+### Recordings
+
+- **`webex_recordings_list`** -- List meeting recordings (filter by `meetingId`, `hostEmail`, date range)
+- **`webex_recordings_get`** -- Get recording details by ID
+- **`webex_recordings_download`** -- Download recording content
+
+### Streaming
+
+- **`webex_subscribe_room_messages`** -- Subscribe to real-time messages in a room
+- **`webex_unsubscribe`** -- Unsubscribe from a subscription
+- **`webex_wait_for_message`** -- Wait for the next message on a subscription
+- **`webex_list_subscriptions`** -- List active subscriptions
 
 ### Webhooks
 
@@ -383,13 +404,16 @@ webex-go-mcp/
   tools/
     filter.go         -- ToolRegistrar interface, tool include/exclude filtering
     enrich.go         -- Response enrichment helpers (person names, room info, files)
-    messages.go       -- 5 message tools
+    messages.go       -- 6 message tools
     rooms.go          -- 5 room tools
+    recordings.go     -- 3 recording tools
     teams.go          -- 4 team tools
     memberships.go    -- 4 membership tools
-    meetings.go       -- 6 meeting tools
+    meetings.go       -- 8 meeting tools
     transcripts.go    -- 5 transcript tools
     webhooks.go       -- 5 webhook tools
+  streaming/
+    manager.go        -- Real-time subscriptions (subscribe, unsubscribe, wait_for_message, list_subscriptions)
 ```
 
 ## Dependencies
