@@ -1,11 +1,11 @@
 module github.com/tejzpr/webex-go-mcp
 
-go 1.25.0
+go 1.26.0
 
 require (
-	github.com/WebexCommunity/webex-go-sdk/v2 v2.0.16
+	github.com/WebexCommunity/webex-go-sdk/v2 v2.0.18
 	github.com/lib/pq v1.11.2
-	github.com/mark3labs/mcp-go v0.44.1
+	github.com/mark3labs/mcp-go v0.45.0
 	github.com/mattn/go-sqlite3 v1.14.34
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
@@ -50,8 +50,8 @@ require (
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/crypto v0.48.0 // indirect
 	golang.org/x/net v0.51.0 // indirect
-	golang.org/x/sys v0.41.0 // indirect
+	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
-	golang.org/x/time v0.14.0 // indirect
+	golang.org/x/time v0.15.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

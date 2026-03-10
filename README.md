@@ -27,7 +27,7 @@ A Go-based [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) serv
 
 ## Prerequisites
 
-- Go 1.23 or later
+- Go 1.26 or later
 - **STDIO mode**: A [Webex access token](https://developer.webex.com/docs/getting-your-personal-access-token)
 - **HTTP mode**: A [Webex Integration](https://developer.webex.com/docs/integrations) (Client ID, Client Secret, Redirect URI)
 
