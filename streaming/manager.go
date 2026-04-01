@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
 	webex "github.com/WebexCommunity/webex-go-sdk/v2"
 	"github.com/WebexCommunity/webex-go-sdk/v2/conversation"
+	"github.com/WebexCommunity/webex-go-sdk/v2/people"
 
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -25,6 +27,8 @@ type eventHandler struct {
 type Subscription struct {
 	ID        string
 	RoomID    string
+	Email     string // target email for mention subscriptions
+	PersonID  string // resolved person ID for mention subscriptions
 	TokenHash string
 	SessionID string
 	CreatedAt time.Time
@@ -145,6 +149,228 @@ func (m *MercuryManager) Subscribe(
 
 	log.Printf("[Mercury] Subscription %s created: room=%s events=%v session=%s", subID, roomID, eventTypes, sessionID)
 	return sub, nil
+}
+
+// SubscribeMentions creates a subscription that filters for messages mentioning
+// a specific email address or sent as direct messages (1:1) to that user.
+// It listens to all Mercury post/share events and checks:
+//   - The decrypted content for Webex mention syntax: <@personEmail:target@example.com|...>
+//   - Whether the room is a 1:1 (direct) conversation via Target.Tags containing "ONE_ON_ONE"
+//   - Whether the message was sent directly to the user (Actor.EmailAddress != targetEmail in a 1:1)
+func (m *MercuryManager) SubscribeMentions(
+	ctx context.Context,
+	client *webex.WebexClient,
+	accessToken string,
+	targetEmail string,
+	includeDirect bool,
+) (*Subscription, error) {
+	if targetEmail == "" {
+		return nil, fmt.Errorf("target email is required")
+	}
+	targetEmail = strings.ToLower(strings.TrimSpace(targetEmail))
+
+	tokHash := hashToken(accessToken)
+
+	// Resolve email to personId for additional matching
+	personID := ""
+	page, err := client.People().List(&people.ListOptions{Email: targetEmail})
+	if err == nil && len(page.Items) > 0 {
+		personID = page.Items[0].ID
+		log.Printf("[Mercury] Resolved email %s to personId %s", targetEmail, personID)
+	} else {
+		log.Printf("[Mercury] Could not resolve email %s to personId (will match by email pattern only): %v", targetEmail, err)
+	}
+
+	// Get or create the user's Mercury connection
+	uc, err := m.getOrCreateConnection(client, tokHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Mercury connection: %w", err)
+	}
+
+	// Generate subscription ID
+	subID := fmt.Sprintf("msub_%x", sha256.Sum256([]byte(fmt.Sprintf("%s_%s_%d", tokHash, targetEmail, time.Now().UnixNano()))))[:21]
+
+	// Get the session ID from context for targeted notifications
+	sessionID := ""
+	if session := server.ClientSessionFromContext(ctx); session != nil {
+		sessionID = session.SessionID()
+	}
+
+	subCtx, cancel := context.WithCancel(context.Background())
+
+	sub := &Subscription{
+		ID:        subID,
+		Email:     targetEmail,
+		PersonID:  personID,
+		TokenHash: tokHash,
+		SessionID: sessionID,
+		CreatedAt: time.Now(),
+		cancel:    cancel,
+	}
+
+	m.mu.Lock()
+	m.subscriptions[subID] = sub
+	m.mu.Unlock()
+
+	// Build the mention pattern to search for in decrypted content
+	// Webex mention syntax: <@personEmail:user@example.com|DisplayName>
+	mentionPattern := strings.ToLower("<@personemail:" + targetEmail)
+
+	// Register handlers for post and share events (no room filter — listen to everything)
+	for _, eventType := range []string{"post", "share"} {
+		et := eventType
+		handler := func(activity *conversation.Activity) {
+			select {
+			case <-subCtx.Done():
+				return
+			default:
+			}
+
+			matched := false
+
+			// Check 1: Is the decrypted content mentioning the target email?
+			content := m.getActivityContent(uc, activity)
+			if content != "" && strings.Contains(strings.ToLower(content), mentionPattern) {
+				matched = true
+			}
+
+			// Check 2: If we have a personId, also check for <@personId:XXXXX> pattern
+			if !matched && personID != "" {
+				personIDPattern := strings.ToLower("<@personid:" + personID)
+				if content != "" && strings.Contains(strings.ToLower(content), personIDPattern) {
+					matched = true
+				}
+			}
+
+			// Check 3: Is this an @all mention? (affects everyone in the room)
+			if !matched && content != "" && strings.Contains(strings.ToLower(content), "<@all>") {
+				matched = true
+			}
+
+			// Check 4: Is this a direct (1:1) message?
+			if !matched && includeDirect {
+				if isDirectRoom(activity) {
+					// In a 1:1 room, any message from the other person is a "direct message to us"
+					// Skip messages sent by the target user themselves
+					if activity.Actor != nil && strings.ToLower(activity.Actor.EmailAddress) != targetEmail {
+						matched = true
+					}
+				}
+			}
+
+			if !matched {
+				return
+			}
+
+			payload := m.buildMentionEventPayload(sub, et, activity, content)
+			m.sendNotification(sessionID, payload)
+		}
+		uc.convClient.On(et, handler)
+		sub.handlers = append(sub.handlers, eventHandler{eventType: et, handler: handler})
+	}
+
+	// Ensure Mercury is connected
+	uc.mu.Lock()
+	if !uc.connected {
+		log.Printf("[Mercury] Connecting Mercury for user (hash=%s...)", tokHash[:8])
+		if err := uc.convClient.Connect(); err != nil {
+			uc.mu.Unlock()
+			m.Unsubscribe(subID)
+			return nil, fmt.Errorf("failed to connect Mercury: %w", err)
+		}
+		uc.connected = true
+		log.Printf("[Mercury] Connected successfully for user (hash=%s...)", tokHash[:8])
+	}
+	uc.mu.Unlock()
+
+	log.Printf("[Mercury] Mention subscription %s created: email=%s personId=%s includeDirect=%v session=%s",
+		subID, targetEmail, personID, includeDirect, sessionID)
+	return sub, nil
+}
+
+// isDirectRoom checks if the activity's target room is a 1:1 (direct) conversation.
+// Webex marks 1:1 rooms with the "ONE_ON_ONE" tag in the conversation target.
+func isDirectRoom(activity *conversation.Activity) bool {
+	if activity.Target == nil {
+		return false
+	}
+	for _, tag := range activity.Target.Tags {
+		if tag == "ONE_ON_ONE" {
+			return true
+		}
+	}
+	return false
+}
+
+// getActivityContent extracts the decrypted message content from an activity.
+func (m *MercuryManager) getActivityContent(uc *userConnection, activity *conversation.Activity) string {
+	// Try the already-decrypted content first
+	if activity.Content != "" {
+		return activity.Content
+	}
+
+	// Try to get content via the conversation client (handles decryption)
+	content, err := uc.convClient.GetMessageContent(activity)
+	if err == nil && content != "" {
+		return content
+	}
+
+	// Fall back to DecryptedObject
+	if activity.DecryptedObject != nil {
+		if activity.DecryptedObject.DisplayName != "" {
+			return activity.DecryptedObject.DisplayName
+		}
+		if activity.DecryptedObject.Content != "" {
+			return activity.DecryptedObject.Content
+		}
+	}
+
+	return ""
+}
+
+// buildMentionEventPayload creates a notification payload for a mention/DM event.
+func (m *MercuryManager) buildMentionEventPayload(sub *Subscription, eventType string, activity *conversation.Activity, content string) map[string]interface{} {
+	matchType := "mention"
+	if isDirectRoom(activity) {
+		matchType = "direct_message"
+	} else if content != "" && strings.Contains(strings.ToLower(content), "<@all>") {
+		matchType = "mention_all"
+	}
+
+	payload := map[string]interface{}{
+		"subscriptionId": sub.ID,
+		"eventType":      eventType,
+		"matchType":      matchType,
+		"targetEmail":    sub.Email,
+		"timestamp":      activity.Published,
+	}
+
+	if activity.Actor != nil {
+		payload["sender"] = map[string]interface{}{
+			"displayName":  activity.Actor.DisplayName,
+			"emailAddress": activity.Actor.EmailAddress,
+			"id":           activity.Actor.ID,
+		}
+	}
+
+	if activity.Target != nil {
+		roomInfo := map[string]interface{}{
+			"id":       activity.Target.ID,
+			"globalId": activity.Target.GlobalID,
+		}
+		if isDirectRoom(activity) {
+			roomInfo["type"] = "direct"
+		} else {
+			roomInfo["type"] = "group"
+		}
+		payload["room"] = roomInfo
+	}
+
+	if content != "" {
+		payload["content"] = content
+	}
+
+	return payload
 }
 
 // Unsubscribe cancels a subscription and cleans up resources.

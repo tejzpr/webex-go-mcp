@@ -67,14 +67,72 @@ func RegisterStreamingTools(s ToolRegistrar, resolver auth.ClientResolver, manag
 		},
 	)
 
+	// subscribe_mentions — opens a Mercury listener for @mentions and direct messages
+	s.AddTool(
+		mcp.NewTool("webex_subscribe_mentions",
+			mcp.WithDescription("Subscribe to real-time messages that @mention a specific email address or are sent as direct messages (1:1) to that user. "+
+				"Listens to all Mercury events across all rooms and filters for:\n"+
+				"1. Messages containing @mentions via Webex mention syntax (<@personEmail:user@example.com|Name>)\n"+
+				"2. Messages containing @mentions via person ID (<@personId:...|Name>)\n"+
+				"3. Messages containing @all mentions (notifies everyone in the room)\n"+
+				"4. Direct messages (1:1 rooms) sent to the target user (when includeDirect is true)\n\n"+
+				"Returns immediately with a subscriptionId. Matching events are streamed as MCP notifications with matchType='mention', 'mention_all', or 'direct_message'. "+
+				"Use webex_unsubscribe to stop. Requires HTTP mode with OAuth authentication."),
+			mcp.WithString("email",
+				mcp.Required(),
+				mcp.Description("The email address to monitor for @mentions and direct messages. "+
+					"The tool will resolve this to a Webex person ID for matching.")),
+			mcp.WithBoolean("includeDirect",
+				mcp.Description("Whether to also include direct messages (1:1) sent to the target user. Default: true.")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
+			email := req.GetString("email", "")
+			if email == "" {
+				return mcp.NewToolResultError("email is required"), nil
+			}
+
+			includeDirect := req.GetBool("includeDirect", true)
+
+			// Get the access token from context (HTTP mode) or from the client (STDIO mode)
+			accessToken, ok := auth.WebexTokenFromContext(ctx)
+			if !ok || accessToken == "" {
+				accessToken = client.Core().GetAccessToken()
+			}
+			if accessToken == "" {
+				return mcp.NewToolResultError("No access token available for Mercury connection."), nil
+			}
+
+			sub, err := manager.SubscribeMentions(ctx, client, accessToken, email, includeDirect)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to subscribe: %v", err)), nil
+			}
+
+			result := map[string]interface{}{
+				"subscriptionId": sub.ID,
+				"email":          sub.Email,
+				"personId":       sub.PersonID,
+				"includeDirect":  includeDirect,
+				"status":         "listening",
+				"message":        "Mention subscription active. Events will be streamed as MCP notifications with matchType='mention' or 'direct_message'. Use webex_unsubscribe to stop.",
+			}
+			data, _ := json.MarshalIndent(result, "", "  ")
+			return mcp.NewToolResultText(string(data)), nil
+		},
+	)
+
 	// unsubscribe — cancels a Mercury subscription
 	s.AddTool(
 		mcp.NewTool("webex_unsubscribe",
-			mcp.WithDescription("Cancel a Mercury event subscription created by webex_subscribe_room_messages. "+
+			mcp.WithDescription("Cancel a Mercury event subscription created by webex_subscribe_room_messages or webex_subscribe_mentions. "+
 				"Stops streaming events for the given subscription."),
 			mcp.WithString("subscriptionId",
 				mcp.Required(),
-				mcp.Description("The subscription ID returned by webex_subscribe_room_messages.")),
+				mcp.Description("The subscription ID returned by webex_subscribe_room_messages or webex_subscribe_mentions.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			subID := req.GetString("subscriptionId", "")
@@ -162,11 +220,19 @@ func RegisterStreamingTools(s ToolRegistrar, resolver auth.ClientResolver, manag
 
 			items := make([]map[string]interface{}, 0, len(subs))
 			for _, sub := range subs {
-				items = append(items, map[string]interface{}{
+				item := map[string]interface{}{
 					"subscriptionId": sub.ID,
-					"roomId":         sub.RoomID,
 					"createdAt":      sub.CreatedAt.Format(time.RFC3339),
-				})
+				}
+				if sub.Email != "" {
+					item["type"] = "mentions"
+					item["email"] = sub.Email
+					item["personId"] = sub.PersonID
+				} else {
+					item["type"] = "room"
+					item["roomId"] = sub.RoomID
+				}
+				items = append(items, item)
 			}
 
 			result := map[string]interface{}{
