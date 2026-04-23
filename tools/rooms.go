@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"strings"
 	"sync"
 
 	webex "github.com/WebexCommunity/webex-go-sdk/v2"
@@ -278,6 +280,173 @@ func RegisterRoomTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				return mcp.NewToolResultError(fmt.Sprintf("Failed to update room: %v", err)), nil
 			}
 
+			data, _ := json.MarshalIndent(result, "", "  ")
+			return mcp.NewToolResultText(string(data)), nil
+		},
+	)
+
+	// webex_room_find_by_name — exact match room search with internal pagination
+	s.AddTool(
+		mcp.NewTool("webex_room_find_by_name",
+			mcp.WithDescription("Find a Webex room/space by its exact title. Iterates through all rooms internally "+
+				"(handling pagination automatically) until a room with a matching title is found.\n"+
+				"\n"+
+				"The match is case-insensitive. Returns the first matching room with full details.\n"+
+				"\n"+
+				"USE THIS when you know the exact name of a room and need its ID. "+
+				"For partial/fuzzy name matching, use webex_room_find_like_name instead."),
+			mcp.WithString("name", mcp.Required(),
+				mcp.Description("The exact room title to search for (case-insensitive). Example: 'Project Alpha Discussion'.")),
+			mcp.WithString("type",
+				mcp.Description("Filter by room type: 'direct' (1:1) or 'group'. Omit to search both types.")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
+			name, err := req.RequireString("name")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			nameLower := strings.ToLower(strings.TrimSpace(name))
+
+			opts := &rooms.ListOptions{Max: PageSize, SortBy: "lastactivity"}
+			if v := req.GetString("type", ""); v != "" {
+				opts.Type = v
+			}
+
+			page, pErr := client.Rooms().List(opts)
+			if pErr != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to list rooms: %v", pErr)), nil
+			}
+
+			// Search through pages
+			pagesSearched := 0
+			const maxPages = 50
+			for {
+				pagesSearched++
+				for _, room := range page.Items {
+					if strings.ToLower(room.Title) == nameLower {
+						data, _ := json.MarshalIndent(map[string]interface{}{
+							"room":          room,
+							"pagesSearched": pagesSearched,
+						}, "", "  ")
+						return mcp.NewToolResultText(string(data)), nil
+					}
+				}
+
+				if !page.HasNext || page.NextPage == "" || pagesSearched >= maxPages {
+					break
+				}
+
+				rawPage, fErr := FetchPage(client, page.NextPage)
+				if fErr != nil {
+					log.Printf("[RoomFindByName] pagination error on page %d: %v", pagesSearched, fErr)
+					break
+				}
+				items, uErr := UnmarshalPageItems[rooms.Room](rawPage)
+				if uErr != nil {
+					log.Printf("[RoomFindByName] unmarshal error on page %d: %v", pagesSearched, uErr)
+					break
+				}
+				page.Items = items
+				page.HasNext = rawPage.HasNext
+				page.NextPage = rawPage.NextPage
+			}
+
+			return mcp.NewToolResultText(fmt.Sprintf(`{"error": "Room not found", "name": %q, "pagesSearched": %d}`, name, pagesSearched)), nil
+		},
+	)
+
+	// webex_room_find_like_name — substring/fuzzy match room search with internal pagination
+	s.AddTool(
+		mcp.NewTool("webex_room_find_like_name",
+			mcp.WithDescription("Find Webex rooms/spaces whose title contains a search term. Iterates through all rooms internally "+
+				"(handling pagination automatically) and returns up to 10 matching rooms.\n"+
+				"\n"+
+				"The match is case-insensitive substring match. For example, searching 'alpha' would match "+
+				"'Project Alpha Discussion', 'Alpha Team', etc.\n"+
+				"\n"+
+				"USE THIS when you have a partial name or are unsure of the exact room title. "+
+				"For exact name matching, use webex_room_find_by_name instead."),
+			mcp.WithString("query", mcp.Required(),
+				mcp.Description("Substring to search for in room titles (case-insensitive). Example: 'alpha', 'standup', 'dev team'.")),
+			mcp.WithString("type",
+				mcp.Description("Filter by room type: 'direct' (1:1) or 'group'. Omit to search both types.")),
+			mcp.WithNumber("maxResults",
+				mcp.Description("Maximum number of matching rooms to return. Default: 10, max: 25.")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
+			query, err := req.RequireString("query")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			queryLower := strings.ToLower(strings.TrimSpace(query))
+
+			maxResults := req.GetInt("maxResults", 10)
+			if maxResults <= 0 {
+				maxResults = 10
+			}
+			if maxResults > 25 {
+				maxResults = 25
+			}
+
+			opts := &rooms.ListOptions{Max: PageSize, SortBy: "lastactivity"}
+			if v := req.GetString("type", ""); v != "" {
+				opts.Type = v
+			}
+
+			page, pErr := client.Rooms().List(opts)
+			if pErr != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to list rooms: %v", pErr)), nil
+			}
+
+			var matches []rooms.Room
+			pagesSearched := 0
+			const maxPages = 50
+			for {
+				pagesSearched++
+				for _, room := range page.Items {
+					if strings.Contains(strings.ToLower(room.Title), queryLower) {
+						matches = append(matches, room)
+						if len(matches) >= maxResults {
+							break
+						}
+					}
+				}
+
+				if len(matches) >= maxResults || !page.HasNext || page.NextPage == "" || pagesSearched >= maxPages {
+					break
+				}
+
+				rawPage, fErr := FetchPage(client, page.NextPage)
+				if fErr != nil {
+					log.Printf("[RoomFindLikeName] pagination error on page %d: %v", pagesSearched, fErr)
+					break
+				}
+				items, uErr := UnmarshalPageItems[rooms.Room](rawPage)
+				if uErr != nil {
+					log.Printf("[RoomFindLikeName] unmarshal error on page %d: %v", pagesSearched, uErr)
+					break
+				}
+				page.Items = items
+				page.HasNext = rawPage.HasNext
+				page.NextPage = rawPage.NextPage
+			}
+
+			result := map[string]interface{}{
+				"rooms":         matches,
+				"matchCount":    len(matches),
+				"pagesSearched": pagesSearched,
+				"query":         query,
+			}
 			data, _ := json.MarshalIndent(result, "", "  ")
 			return mcp.NewToolResultText(string(data)), nil
 		},

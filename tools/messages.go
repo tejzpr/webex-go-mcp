@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"mime"
 	"os"
 	"path/filepath"
@@ -456,6 +457,131 @@ func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				if len(fileInfos) > 0 {
 					response["files"] = fileInfos
 				}
+			}
+
+			data, _ := json.MarshalIndent(response, "", "  ")
+			return mcp.NewToolResultText(string(data)), nil
+		},
+	)
+
+	// webex_find_messages_like_in_room — iterative substring search through room messages
+	s.AddTool(
+		mcp.NewTool("webex_find_messages_like_in_room",
+			mcp.WithDescription("Search for messages in a Webex room whose text contains a search term. Iterates through messages internally "+
+				"(handling pagination automatically) and returns up to 10 matching messages.\n"+
+				"\n"+
+				"The match is case-insensitive substring match on the message text. For example, searching 'deadline' "+
+				"would match messages containing 'The deadline is Friday', 'DEADLINE EXTENDED', etc.\n"+
+				"\n"+
+				"RESPONSE: Each matching message includes sender name, email, timestamp, and the full message text.\n"+
+				"\n"+
+				"TIPS:\n"+
+				"- Use 'before' to limit the time range and speed up the search.\n"+
+				"- The tool searches up to 500 messages (50 pages) before stopping. For very old messages, narrow the search with 'before'."),
+			mcp.WithString("roomId", mcp.Required(),
+				mcp.Description("The ID of the room to search messages in. Get this from webex_rooms_list or webex_room_find_by_name.")),
+			mcp.WithString("query", mcp.Required(),
+				mcp.Description("Substring to search for in message text (case-insensitive). Example: 'deadline', 'action items', 'meeting notes'.")),
+			mcp.WithString("before",
+				mcp.Description("Only search messages sent before this date/time (ISO 8601 format, e.g. '2026-02-01T00:00:00Z'). Narrows the search window.")),
+			mcp.WithNumber("maxResults",
+				mcp.Description("Maximum number of matching messages to return. Default: 10, max: 25.")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
+			roomID, err := req.RequireString("roomId")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			query, err := req.RequireString("query")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			queryLower := strings.ToLower(strings.TrimSpace(query))
+
+			maxResults := req.GetInt("maxResults", 10)
+			if maxResults <= 0 {
+				maxResults = 10
+			}
+			if maxResults > 25 {
+				maxResults = 25
+			}
+
+			opts := &messages.ListOptions{
+				RoomID: roomID,
+				Max:    PageSize,
+			}
+			if v := req.GetString("before", ""); v != "" {
+				opts.Before = v
+			}
+
+			page, pErr := client.Messages().List(opts)
+			if pErr != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to list messages: %v", pErr)), nil
+			}
+
+			nameCache := NewPersonNameCache(client)
+			var matches []map[string]interface{}
+			pagesSearched := 0
+			totalScanned := 0
+			const maxPages = 50
+			for {
+				pagesSearched++
+				for _, msg := range page.Items {
+					totalScanned++
+					if strings.Contains(strings.ToLower(msg.Text), queryLower) {
+						match := map[string]interface{}{
+							"id":          msg.ID,
+							"text":        msg.Text,
+							"personId":    msg.PersonID,
+							"senderName":  nameCache.Resolve(msg.PersonID),
+							"personEmail": msg.PersonEmail,
+							"created":     msg.Created,
+						}
+						if len(msg.Files) > 0 {
+							match["fileCount"] = len(msg.Files)
+						}
+						matches = append(matches, match)
+						if len(matches) >= maxResults {
+							break
+						}
+					}
+				}
+
+				if len(matches) >= maxResults || !page.HasNext || page.NextPage == "" || pagesSearched >= maxPages {
+					break
+				}
+
+				rawPage, fErr := FetchPage(client, page.NextPage)
+				if fErr != nil {
+					log.Printf("[FindMessagesLike] pagination error on page %d: %v", pagesSearched, fErr)
+					break
+				}
+				items, uErr := UnmarshalPageItems[messages.Message](rawPage)
+				if uErr != nil {
+					log.Printf("[FindMessagesLike] unmarshal error on page %d: %v", pagesSearched, uErr)
+					break
+				}
+				page.Items = items
+				page.HasNext = rawPage.HasNext
+				page.NextPage = rawPage.NextPage
+			}
+
+			response := map[string]interface{}{
+				"messages":      matches,
+				"matchCount":    len(matches),
+				"totalScanned":  totalScanned,
+				"pagesSearched": pagesSearched,
+				"query":         query,
+			}
+
+			if roomInfo := resolveRoomInfo(client, roomID); roomInfo != nil {
+				response["room"] = roomInfo
 			}
 
 			data, _ := json.MarshalIndent(response, "", "  ")
