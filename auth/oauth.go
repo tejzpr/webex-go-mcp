@@ -490,7 +490,7 @@ func validatePKCE(challenge, method, verifier string) bool {
 
 // BuildWWWAuthenticate builds the WWW-Authenticate header value for 401 responses.
 func BuildWWWAuthenticate(serverURL string) string {
-	resourceMetadataURL := serverURL + "/.well-known/oauth-protected-resource"
+	resourceMetadataURL := protectedResourceMetadataURL(serverURL)
 	return fmt.Sprintf(`Bearer resource_metadata="%s"`, resourceMetadataURL)
 }
 

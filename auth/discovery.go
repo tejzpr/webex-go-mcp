@@ -3,7 +3,11 @@ package auth
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 )
+
+const mcpResourcePath = "/mcp"
+const protectedResourceMetadataPath = "/.well-known/oauth-protected-resource"
 
 // OAuthConfig holds the Webex Integration OAuth configuration.
 type OAuthConfig struct {
@@ -16,9 +20,9 @@ type OAuthConfig struct {
 
 // ProtectedResourceMetadata is the RFC 9728 metadata document.
 type ProtectedResourceMetadata struct {
-	Resource             string   `json:"resource"`
-	AuthorizationServers []string `json:"authorization_servers"`
-	ScopesSupported      []string `json:"scopes_supported,omitempty"`
+	Resource               string   `json:"resource"`
+	AuthorizationServers   []string `json:"authorization_servers"`
+	ScopesSupported        []string `json:"scopes_supported,omitempty"`
 	BearerMethodsSupported []string `json:"bearer_methods_supported,omitempty"`
 }
 
@@ -52,9 +56,10 @@ func (dh *DiscoveryHandler) HandleProtectedResourceMetadata(w http.ResponseWrite
 		return
 	}
 
+	serverURL := canonicalServerURL(dh.config.ServerURL)
 	meta := &ProtectedResourceMetadata{
-		Resource:             dh.config.ServerURL,
-		AuthorizationServers: []string{dh.config.ServerURL},
+		Resource:               mcpResourceURL(serverURL),
+		AuthorizationServers:   []string{serverURL},
 		BearerMethodsSupported: []string{"header"},
 	}
 
@@ -74,13 +79,14 @@ func (dh *DiscoveryHandler) HandleAuthorizationServerMetadata(w http.ResponseWri
 		return
 	}
 
+	serverURL := canonicalServerURL(dh.config.ServerURL)
 	meta := &AuthorizationServerMetadata{
-		Issuer:                dh.config.ServerURL,
-		AuthorizationEndpoint: dh.config.ServerURL + "/authorize",
-		TokenEndpoint:         dh.config.ServerURL + "/token",
-		RegistrationEndpoint:  dh.config.ServerURL + "/register",
-		ResponseTypesSupported: []string{"code"},
-		GrantTypesSupported:    []string{"authorization_code"},
+		Issuer:                            serverURL,
+		AuthorizationEndpoint:             serverURL + "/authorize",
+		TokenEndpoint:                     serverURL + "/token",
+		RegistrationEndpoint:              serverURL + "/register",
+		ResponseTypesSupported:            []string{"code"},
+		GrantTypesSupported:               []string{"authorization_code"},
 		TokenEndpointAuthMethodsSupported: []string{"none", "client_secret_post", "client_secret_basic"},
 		CodeChallengeMethodsSupported:     []string{"S256", "plain"},
 	}
@@ -101,6 +107,18 @@ func splitScopes(scopes string) []string {
 		result = append(result, s)
 	}
 	return result
+}
+
+func canonicalServerURL(serverURL string) string {
+	return strings.TrimRight(serverURL, "/")
+}
+
+func mcpResourceURL(serverURL string) string {
+	return canonicalServerURL(serverURL) + mcpResourcePath
+}
+
+func protectedResourceMetadataURL(serverURL string) string {
+	return canonicalServerURL(serverURL) + protectedResourceMetadataPath + mcpResourcePath
 }
 
 // splitNonEmpty splits a string by a separator and returns non-empty parts.

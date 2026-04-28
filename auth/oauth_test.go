@@ -13,11 +13,11 @@ func TestValidatePKCE(t *testing.T) {
 	s256Challenge := base64.RawURLEncoding.EncodeToString(h[:])
 
 	tests := []struct {
-		name     string
+		name      string
 		challenge string
-		method   string
-		verifier string
-		want     bool
+		method    string
+		verifier  string
+		want      bool
 	}{
 		{"S256 match", s256Challenge, "S256", verifier, true},
 		{"S256 empty method", s256Challenge, "", verifier, true},
@@ -83,7 +83,7 @@ func TestSplitBearerToken(t *testing.T) {
 func TestBuildWWWAuthenticate(t *testing.T) {
 	serverURL := "https://example.com"
 	got := BuildWWWAuthenticate(serverURL)
-	want := `Bearer resource_metadata="https://example.com/.well-known/oauth-protected-resource"`
+	want := `Bearer resource_metadata="https://example.com/.well-known/oauth-protected-resource/mcp"`
 	if got != want {
 		t.Errorf("BuildWWWAuthenticate() = %q, want %q", got, want)
 	}

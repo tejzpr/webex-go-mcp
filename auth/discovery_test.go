@@ -10,7 +10,7 @@ import (
 func TestHandleProtectedResourceMetadata_GET(t *testing.T) {
 	cfg := &OAuthConfig{
 		ServerURL: "https://example.com",
-		Scopes:   "a b c",
+		Scopes:    "a b c",
 	}
 	dh := NewDiscoveryHandler(cfg)
 
@@ -26,8 +26,8 @@ func TestHandleProtectedResourceMetadata_GET(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&meta); err != nil {
 		t.Fatalf("decode JSON: %v", err)
 	}
-	if meta.Resource != "https://example.com" {
-		t.Errorf("resource = %q, want https://example.com", meta.Resource)
+	if meta.Resource != "https://example.com/mcp" {
+		t.Errorf("resource = %q, want https://example.com/mcp", meta.Resource)
 	}
 	if len(meta.AuthorizationServers) != 1 || meta.AuthorizationServers[0] != "https://example.com" {
 		t.Errorf("authorization_servers = %v", meta.AuthorizationServers)
@@ -37,6 +37,26 @@ func TestHandleProtectedResourceMetadata_GET(t *testing.T) {
 	}
 	if len(meta.ScopesSupported) != 3 {
 		t.Errorf("scopes_supported = %v, want 3 elements", meta.ScopesSupported)
+	}
+}
+
+func TestHandleProtectedResourceMetadata_TrailingSlash(t *testing.T) {
+	cfg := &OAuthConfig{ServerURL: "https://example.com/"}
+	dh := NewDiscoveryHandler(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-protected-resource", nil)
+	rec := httptest.NewRecorder()
+	dh.HandleProtectedResourceMetadata(rec, req)
+
+	var meta ProtectedResourceMetadata
+	if err := json.NewDecoder(rec.Body).Decode(&meta); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	if meta.Resource != "https://example.com/mcp" {
+		t.Errorf("resource = %q, want https://example.com/mcp", meta.Resource)
+	}
+	if len(meta.AuthorizationServers) != 1 || meta.AuthorizationServers[0] != "https://example.com" {
+		t.Errorf("authorization_servers = %v", meta.AuthorizationServers)
 	}
 }
 
@@ -56,7 +76,7 @@ func TestHandleProtectedResourceMetadata_POST(t *testing.T) {
 func TestHandleAuthorizationServerMetadata_GET(t *testing.T) {
 	cfg := &OAuthConfig{
 		ServerURL: "https://example.com",
-		Scopes:   "openid read",
+		Scopes:    "openid read",
 	}
 	dh := NewDiscoveryHandler(cfg)
 

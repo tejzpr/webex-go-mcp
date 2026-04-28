@@ -211,6 +211,7 @@ func startHTTPServer(cfg *HTTPServerConfig) error {
 
 	// Discovery endpoints (unauthenticated)
 	mux.HandleFunc("/.well-known/oauth-protected-resource", discoveryHandler.HandleProtectedResourceMetadata)
+	mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", discoveryHandler.HandleProtectedResourceMetadata)
 	mux.HandleFunc("/.well-known/oauth-authorization-server", discoveryHandler.HandleAuthorizationServerMetadata)
 
 	// OAuth endpoints (unauthenticated)
