@@ -13,6 +13,7 @@ type RegisteredClient struct {
 	ClientSecret            string    `json:"client_secret,omitempty"`
 	RedirectURIs            []string  `json:"redirect_uris"`
 	ClientName              string    `json:"client_name,omitempty"`
+	Scope                   string    `json:"scope,omitempty"`
 	TokenEndpointAuthMethod string    `json:"token_endpoint_auth_method,omitempty"`
 	GrantTypes              []string  `json:"grant_types,omitempty"`
 	ResponseTypes           []string  `json:"response_types,omitempty"`
@@ -26,6 +27,7 @@ type RegisteredClient struct {
 type RegistrationRequest struct {
 	RedirectURIs            []string `json:"redirect_uris"`
 	ClientName              string   `json:"client_name,omitempty"`
+	Scope                   string   `json:"scope,omitempty"`
 	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method,omitempty"`
 	GrantTypes              []string `json:"grant_types,omitempty"`
 	ResponseTypes           []string `json:"response_types,omitempty"`
@@ -38,6 +40,7 @@ type RegistrationResponse struct {
 	ClientIDIssuedAt        int64    `json:"client_id_issued_at"`
 	RedirectURIs            []string `json:"redirect_uris"`
 	ClientName              string   `json:"client_name,omitempty"`
+	Scope                   string   `json:"scope,omitempty"`
 	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
 	GrantTypes              []string `json:"grant_types"`
 	ResponseTypes           []string `json:"response_types"`
@@ -79,6 +82,7 @@ func HandleRegister(store Store) http.HandlerFunc {
 			ClientIDIssuedAt:        client.CreatedAt.Unix(),
 			RedirectURIs:            client.RedirectURIs,
 			ClientName:              client.ClientName,
+			Scope:                   client.Scope,
 			TokenEndpointAuthMethod: client.TokenEndpointAuthMethod,
 			GrantTypes:              client.GrantTypes,
 			ResponseTypes:           client.ResponseTypes,
@@ -86,7 +90,7 @@ func HandleRegister(store Store) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
-		w.WriteHeader(http.StatusCreated)
+		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(resp)
 	}
 }

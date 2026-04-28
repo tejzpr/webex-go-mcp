@@ -134,6 +134,7 @@ func prepareClientRegistration(req *RegistrationRequest) (*RegisteredClient, err
 		ClientSecret:            clientSecret,
 		RedirectURIs:            req.RedirectURIs,
 		ClientName:              req.ClientName,
+		Scope:                   req.Scope,
 		TokenEndpointAuthMethod: authMethod,
 		GrantTypes:              grantTypes,
 		ResponseTypes:           responseTypes,
