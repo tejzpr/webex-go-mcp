@@ -30,7 +30,7 @@ func main() {
 
 	// Define flags
 	rootCmd.Flags().String("mode", "stdio", "Server mode: 'stdio' (default) or 'http' (env: WEBEX_MODE)")
-	rootCmd.Flags().String("access-token", "", "Webex API access token (env: WEBEX_ACCESS_TOKEN). Required for stdio mode.")
+	rootCmd.Flags().String("access-token", "", "Webex API access token (env: WEBEX_ACCESS_TOKEN). Required for stdio mode; optional for static-token http mode.")
 	rootCmd.Flags().String("webex-api-base-url", "https://webexapis.com/v1", "Webex API base URL (env: WEBEX_API_BASE_URL)")
 	rootCmd.Flags().Duration("timeout", 30*time.Second, "HTTP request timeout (env: WEBEX_TIMEOUT)")
 	rootCmd.Flags().String("include", "", "Comma-separated list of tools to include (category:action format, e.g. messages:list,meetings:create). Only these tools will be registered. (env: WEBEX_INCLUDE_TOOLS)")
@@ -174,6 +174,7 @@ func normalizeHTTPBaseURL(raw string) (string, error) {
 }
 
 func runHTTP(sdkConfig *webexsdk.Config, include, exclude string, minimal, readonlyMinimal bool) error {
+	accessToken := viper.GetString("access_token")
 	clientID := viper.GetString("client_id")
 	clientSecret := viper.GetString("client_secret")
 	oauthScopes := viper.GetString("oauth_scopes")
@@ -187,16 +188,6 @@ func runHTTP(sdkConfig *webexsdk.Config, include, exclude string, minimal, reado
 	tlsCert := viper.GetString("tls_cert")
 	tlsKey := viper.GetString("tls_key")
 
-	// Validate required HTTP mode config
-	if clientID == "" {
-		return fmt.Errorf("WEBEX_CLIENT_ID or --client-id is required in http mode")
-	}
-	if clientSecret == "" {
-		return fmt.Errorf("WEBEX_CLIENT_SECRET or --client-secret is required in http mode")
-	}
-	if redirectURI == "" {
-		return fmt.Errorf("WEBEX_REDIRECT_URI or --redirect-uri is required in http mode")
-	}
 	if baseURL == "" {
 		return fmt.Errorf("WEBEX_BASE_URL or --base-url is required in http mode (example: http://localhost:%d)", port)
 	}
@@ -205,21 +196,49 @@ func runHTTP(sdkConfig *webexsdk.Config, include, exclude string, minimal, reado
 		return fmt.Errorf("invalid WEBEX_BASE_URL or --base-url: %w", err)
 	}
 
-	log.Printf("Starting Webex MCP Server v%s in HTTP mode (base_url=%s)", version, baseURL)
-
-	return startHTTPServer(&HTTPServerConfig{
-		Host:    host,
-		Port:    port,
-		TLSCert: tlsCert,
-		TLSKey:  tlsKey,
-		BaseURL: baseURL,
-		OAuthConfig: &auth.OAuthConfig{
+	var oauthConfig *auth.OAuthConfig
+	var staticResolver auth.ClientResolver
+	if clientID != "" || clientSecret != "" {
+		if clientID == "" {
+			return fmt.Errorf("WEBEX_CLIENT_ID or --client-id is required when using OAuth in http mode")
+		}
+		if clientSecret == "" {
+			return fmt.Errorf("WEBEX_CLIENT_SECRET or --client-secret is required when using OAuth in http mode")
+		}
+		if redirectURI == "" {
+			return fmt.Errorf("WEBEX_REDIRECT_URI or --redirect-uri is required when using OAuth in http mode")
+		}
+		if accessToken != "" {
+			log.Printf("WEBEX_ACCESS_TOKEN is set but ignored because WEBEX_CLIENT_ID and WEBEX_CLIENT_SECRET are configured")
+		}
+		oauthConfig = &auth.OAuthConfig{
 			ClientID:     clientID,
 			ClientSecret: clientSecret,
 			Scopes:       oauthScopes,
 			RedirectURI:  redirectURI,
 			ServerURL:    baseURL,
-		},
+		}
+	} else {
+		if accessToken == "" {
+			return fmt.Errorf("either WEBEX_CLIENT_ID + WEBEX_CLIENT_SECRET for OAuth, or WEBEX_ACCESS_TOKEN for static-token HTTP mode, is required")
+		}
+		webexClient, err := webex.NewClient(accessToken, sdkConfig)
+		if err != nil {
+			return fmt.Errorf("failed to create Webex client from WEBEX_ACCESS_TOKEN: %w", err)
+		}
+		staticResolver = auth.NewStaticClientResolver(webexClient)
+	}
+
+	log.Printf("Starting Webex MCP Server v%s in HTTP mode (base_url=%s)", version, baseURL)
+
+	return startHTTPServer(&HTTPServerConfig{
+		Host:           host,
+		Port:           port,
+		TLSCert:        tlsCert,
+		TLSKey:         tlsKey,
+		BaseURL:        baseURL,
+		OAuthConfig:    oauthConfig,
+		StaticResolver: staticResolver,
 		WebexSDKConfig: sdkConfig,
 		StoreConfig: auth.StoreConfig{
 			Type: storeType,

@@ -84,6 +84,7 @@ type HTTPServerConfig struct {
 	TLSKey          string
 	BaseURL         string
 	OAuthConfig     *auth.OAuthConfig
+	StaticResolver  auth.ClientResolver
 	WebexSDKConfig  *webexsdk.Config
 	StoreConfig     auth.StoreConfig
 	Include         string
@@ -177,31 +178,40 @@ func uploadBaseURL(cfg *HTTPServerConfig) string {
 	return fmt.Sprintf("%s://%s:%d", scheme, host, cfg.Port)
 }
 
-// startHTTPServer starts the MCP server in HTTP mode with OAuth 2.1 support.
+// startHTTPServer starts the MCP server in HTTP mode.
+// It uses OAuth 2.1 when OAuthConfig is set, or an unauthenticated MCP endpoint
+// backed by a static server-side Webex token when StaticResolver is set.
 func startHTTPServer(cfg *HTTPServerConfig) error {
-	// Initialize store
-	store, err := auth.NewStore(cfg.StoreConfig)
-	if err != nil {
-		return fmt.Errorf("failed to create store: %w", err)
+	resolver := cfg.StaticResolver
+	var store auth.Store
+	var oauthHandler *auth.OAuthHandler
+	var discoveryHandler *auth.DiscoveryHandler
+	var authMiddleware *auth.AuthMiddleware
+
+	if resolver == nil {
+		if cfg.OAuthConfig == nil {
+			return fmt.Errorf("OAuthConfig is required when HTTP mode is not using WEBEX_ACCESS_TOKEN")
+		}
+
+		var err error
+		store, err = auth.NewStore(cfg.StoreConfig)
+		if err != nil {
+			return fmt.Errorf("failed to create store: %w", err)
+		}
+		defer store.Close()
+
+		log.Printf("Using %s store", cfg.StoreConfig.Type)
+
+		clientCache := auth.NewClientCache(15*time.Minute, cfg.WebexSDKConfig)
+		defer clientCache.Close()
+
+		oauthHandler = auth.NewOAuthHandler(cfg.OAuthConfig, store)
+		discoveryHandler = auth.NewDiscoveryHandler(cfg.OAuthConfig)
+		authMiddleware = auth.NewAuthMiddleware(store, clientCache, oauthHandler, cfg.OAuthConfig.ServerURL)
+		resolver = auth.NewHTTPClientResolver()
+	} else {
+		log.Printf("Using static WEBEX_ACCESS_TOKEN in HTTP mode; MCP endpoint authentication is disabled")
 	}
-	defer store.Close()
-
-	log.Printf("Using %s store", cfg.StoreConfig.Type)
-
-	clientCache := auth.NewClientCache(15*time.Minute, cfg.WebexSDKConfig)
-	defer clientCache.Close()
-
-	// Create OAuth handler
-	oauthHandler := auth.NewOAuthHandler(cfg.OAuthConfig, store)
-
-	// Create discovery handler
-	discoveryHandler := auth.NewDiscoveryHandler(cfg.OAuthConfig)
-
-	// Create auth middleware
-	authMiddleware := auth.NewAuthMiddleware(store, clientCache, oauthHandler, cfg.OAuthConfig.ServerURL)
-
-	// Create the HTTP client resolver
-	resolver := auth.NewHTTPClientResolver()
 
 	uploadManager, err := tools.NewUploadManager(uploadBaseURL(cfg), "", 0)
 	if err != nil {
@@ -242,24 +252,35 @@ func startHTTPServer(cfg *HTTPServerConfig) error {
 	// Build the HTTP mux
 	mux := http.NewServeMux()
 
-	// Discovery endpoints (unauthenticated)
-	mux.HandleFunc("/.well-known/oauth-protected-resource", discoveryHandler.HandleProtectedResourceMetadata)
-	mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", discoveryHandler.HandleProtectedResourceMetadata)
-	mux.HandleFunc("/.well-known/oauth-authorization-server", discoveryHandler.HandleAuthorizationServerMetadata)
+	if discoveryHandler != nil {
+		// Discovery endpoints (unauthenticated)
+		mux.HandleFunc("/.well-known/oauth-protected-resource", discoveryHandler.HandleProtectedResourceMetadata)
+		mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", discoveryHandler.HandleProtectedResourceMetadata)
+		mux.HandleFunc("/.well-known/oauth-authorization-server", discoveryHandler.HandleAuthorizationServerMetadata)
+	}
 
-	// OAuth endpoints (unauthenticated)
-	mux.HandleFunc("/authorize", oauthHandler.HandleAuthorize)
-	mux.HandleFunc("/callback", oauthHandler.HandleCallback)
-	mux.HandleFunc("/token", oauthHandler.HandleToken)
+	if oauthHandler != nil {
+		// OAuth endpoints (unauthenticated)
+		mux.HandleFunc("/authorize", oauthHandler.HandleAuthorize)
+		mux.HandleFunc("/callback", oauthHandler.HandleCallback)
+		mux.HandleFunc("/token", oauthHandler.HandleToken)
+	}
 
-	// Dynamic Client Registration (unauthenticated)
-	mux.HandleFunc("/register", auth.HandleRegister(store))
+	if store != nil {
+		// Dynamic Client Registration (unauthenticated)
+		mux.HandleFunc("/register", auth.HandleRegister(store))
+	}
 
 	// Signed upload endpoint (unauthenticated; URLs are short-lived and HMAC-signed)
 	mux.Handle("/uploads/", uploadManager)
 
-	// MCP endpoint (authenticated)
-	mux.Handle("/mcp", authMiddleware.Wrap(streamableServer))
+	if authMiddleware != nil {
+		// MCP endpoint (authenticated)
+		mux.Handle("/mcp", authMiddleware.Wrap(streamableServer))
+	} else {
+		// MCP endpoint (unauthenticated; static server-side Webex token)
+		mux.Handle("/mcp", streamableServer)
+	}
 
 	// Wrap with logging and CORS
 	corsOrigins := cfg.CORSOrigins

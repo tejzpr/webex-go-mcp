@@ -63,9 +63,10 @@ Configuration is loaded via environment variables and/or CLI flags. CLI flags ta
 
 | Env Variable | CLI Flag | Required | Default | Description |
 |---|---|---|---|---|
-| `WEBEX_CLIENT_ID` | `--client-id` | Yes (http) | - | Webex Integration Client ID |
-| `WEBEX_CLIENT_SECRET` | `--client-secret` | Yes (http) | - | Webex Integration Client Secret |
-| `WEBEX_REDIRECT_URI` | `--redirect-uri` | Yes (http) | - | OAuth redirect URI registered with Webex |
+| `WEBEX_CLIENT_ID` | `--client-id` | Either (http) | - | Webex Integration Client ID. If client ID and secret are configured, OAuth mode is used and `WEBEX_ACCESS_TOKEN` is ignored |
+| `WEBEX_CLIENT_SECRET` | `--client-secret` | Either (http) | - | Webex Integration Client Secret |
+| `WEBEX_ACCESS_TOKEN` | `--access-token` | Either (http) | - | Static server-side Webex token for HTTP mode without MCP OAuth. Used only when client ID and secret are not configured |
+| `WEBEX_REDIRECT_URI` | `--redirect-uri` | Yes for OAuth | - | OAuth redirect URI registered with Webex |
 | `WEBEX_BASE_URL` | `--base-url` | Yes (http) | - | External base URL of this MCP server, used for OAuth metadata and signed upload URLs. Localhost is supported, e.g. `http://localhost:8560` or `localhost:8560` |
 | `WEBEX_OAUTH_SCOPES` | `--oauth-scopes` | No | `spark:all` | Webex OAuth scopes (space-separated) |
 | `WEBEX_HOST` | `--host` | No | `localhost` | HTTP server bind host |
@@ -141,10 +142,19 @@ export WEBEX_ACCESS_TOKEN="your-token-here"
 
 ### HTTP Mode
 
+OAuth mode:
+
 ```bash
 export WEBEX_CLIENT_ID="your-client-id"
 export WEBEX_CLIENT_SECRET="your-client-secret"
 export WEBEX_REDIRECT_URI="http://localhost:8080/callback"
+./webex-go-mcp --mode http --port 8080 --base-url http://localhost:8080
+```
+
+Static token mode:
+
+```bash
+export WEBEX_ACCESS_TOKEN="your-token-here"
 ./webex-go-mcp --mode http --port 8080 --base-url http://localhost:8080
 ```
 
