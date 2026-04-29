@@ -144,14 +144,14 @@ func TestFilteredRegistrar_AddTool(t *testing.T) {
 
 func TestResolvePresets_MinimalFalseReadonlyMinimalFalse(t *testing.T) {
 	include := "webex_custom_tool"
-	got := ResolvePresets(false, false, include)
+	got := ResolvePresets(false, false, false, include)
 	if got != include {
 		t.Errorf("ResolvePresets(false, false, %q) = %q, want %q", include, got, include)
 	}
 }
 
 func TestResolvePresets_MinimalTrue(t *testing.T) {
-	got := ResolvePresets(true, false, "")
+	got := ResolvePresets(true, false, false, "")
 	expected := strings.Join(PresetMinimal, ",")
 	if got != expected {
 		t.Errorf("ResolvePresets(true, false, \"\") = %q, want %q", got, expected)
@@ -160,9 +160,25 @@ func TestResolvePresets_MinimalTrue(t *testing.T) {
 
 func TestResolvePresets_MinimalTrueWithExistingInclude(t *testing.T) {
 	include := "webex_custom_tool"
-	got := ResolvePresets(true, false, include)
+	got := ResolvePresets(true, false, false, include)
 	expected := strings.Join(PresetMinimal, ",") + "," + include
 	if got != expected {
 		t.Errorf("ResolvePresets(true, false, %q) = %q, want %q", include, got, expected)
+	}
+}
+
+func TestResolvePresets_SharedEnvMinimalTrue(t *testing.T) {
+	got := ResolvePresets(false, false, true, "")
+	expected := strings.Join(PresetSharedEnvMinimal, ",")
+	if got != expected {
+		t.Errorf("ResolvePresets(false, false, true, \"\") = %q, want %q", got, expected)
+	}
+}
+
+func TestResolvePresets_SharedEnvMinimalTakesPriority(t *testing.T) {
+	got := ResolvePresets(true, true, true, "")
+	expected := strings.Join(PresetSharedEnvMinimal, ",")
+	if got != expected {
+		t.Errorf("ResolvePresets(true, true, true, \"\") = %q, want %q", got, expected)
 	}
 }

@@ -52,6 +52,7 @@ Configuration is loaded via environment variables and/or CLI flags. CLI flags ta
 | `WEBEX_EXCLUDE_TOOLS` | `--exclude` | No | - | Comma-separated list of tools to exclude |
 | `WEBEX_MINIMAL` | `--minimal` | No | `false` | Enable minimal tool set |
 | `WEBEX_READONLY_MINIMAL` | `--readonly-minimal` | No | `false` | Enable readonly minimal tool set |
+| `WEBEX_SHARED_ENV_MINIMAL` | `--shared-env-minimal` | No | `false` | Enable shared-environment-safe minimal tool set |
 
 ### STDIO Mode Options
 
@@ -88,12 +89,13 @@ The `category:action` shorthand maps to the full tool name `webex_{category}_{ac
 - If `--include` is set, only the specified tools are registered.
 - If `--exclude` is set, all tools except the specified ones are registered.
 - If both are set, `--include` takes priority and `--exclude` is ignored.
-- If neither is set, all 44 tools are registered (default).
+- If neither is set, all tools are registered (default).
 
 **Available categories and actions:**
 
 | Category | Actions |
 |---|---|
+| `people` | `get` |
 | `messages` | `list`, `create`, `send_attachment`, `send_adaptive_card`, `get`, `delete` |
 | `rooms` | `list`, `create`, `get`, `update`, `delete` |
 | `teams` | `list`, `create`, `get`, `update` |
@@ -106,12 +108,13 @@ The `category:action` shorthand maps to the full tool name `webex_{category}_{ac
 
 #### Preset Flags
 
-For convenience, two preset flags are available that automatically add a curated set of tools to the `--include` list:
+For convenience, preset flags are available that automatically add a curated set of tools to the `--include` list:
 
 - **`--minimal`** -- All operations for messages, rooms, teams, meetings, transcripts, and streaming (excludes memberships and webhooks). **30 tools.**
+- **`--shared-env-minimal`** -- Shared bot-safe surface: person lookup and outbound message/card/attachment tools only. No room/message history reads, broad lists, subscriptions, transcripts, meetings, memberships, webhooks, updates, or deletes. **5 tools.**
 - **`--readonly-minimal`** -- Only read/list/get operations for messages, rooms, teams, meetings, transcripts, and streaming. No create, update, or delete. **17 tools.**
 
-These flags **merge** with `--include` -- they don't override it. For example, `--minimal --include "webhooks:list"` registers the minimal set plus `webhooks:list`. If both `--minimal` and `--readonly-minimal` are set, `--minimal` takes priority.
+These flags **merge** with `--include` -- they don't override it. For example, `--minimal --include "webhooks:list"` registers the minimal set plus `webhooks:list`. If multiple presets are set, `--shared-env-minimal` takes priority because it is the safest.
 
 **Examples:**
 
@@ -127,6 +130,9 @@ These flags **merge** with `--include` -- they don't override it. For example, `
 
 # Use readonly-minimal (only read operations, no writes)
 ./webex-go-mcp --readonly-minimal
+
+# Use shared-env-minimal (safe for shared bot deployments)
+./webex-go-mcp --shared-env-minimal
 
 # Minimal preset plus an extra tool
 ./webex-go-mcp --minimal --include "webhooks:list"

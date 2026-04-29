@@ -148,7 +148,7 @@ func normalizeToolName(entry string) []string {
 	return candidates
 }
 
-// Preset tool lists for --minimal and --readonly-minimal flags.
+// Preset tool lists for --minimal, --shared-env-minimal, and --readonly-minimal flags.
 // These are full tool names (webex_{category}_{action}).
 var (
 	// PresetMinimal includes all tools for messages, rooms, teams, meetings, and transcripts.
@@ -164,6 +164,16 @@ var (
 		"webex_transcripts_list", "webex_transcripts_download", "webex_transcripts_list_snippets", "webex_transcripts_get_snippet", "webex_transcripts_update_snippet",
 		"webex_subscribe_room_messages", "webex_subscribe_mentions", "webex_unsubscribe", "webex_wait_for_message", "webex_list_subscriptions",
 		"webex_fetch_next_page",
+	}
+
+	// PresetSharedEnvMinimal includes tools that are safe for a shared bot-style
+	// MCP deployment. It allows directed outbound messages and person lookup, but
+	// excludes broad read/list surfaces, history access, admin changes, deletes,
+	// subscriptions, meetings, transcripts, memberships, and webhooks.
+	PresetSharedEnvMinimal = []string{
+		"webex_people_get",
+		"webex_messages_create", "webex_messages_send_attachment", "webex_messages_send_adaptive_card",
+		"webex_uploads_request_url",
 	}
 
 	// PresetReadonlyMinimal includes only read/GET tools for messages, rooms, teams, meetings, and transcripts.
@@ -183,10 +193,13 @@ var (
 
 // ResolvePresets merges preset flags into the include string.
 // Preset tools are added to the include list (they don't override --include or --exclude).
-// If both minimal and readonlyMinimal are true, minimal takes priority (it's a superset).
-func ResolvePresets(minimal, readonlyMinimal bool, include string) string {
+// If multiple presets are set, sharedEnvMinimal takes priority because it is the safest.
+func ResolvePresets(minimal, readonlyMinimal, sharedEnvMinimal bool, include string) string {
 	var preset []string
 	switch {
+	case sharedEnvMinimal:
+		preset = PresetSharedEnvMinimal
+		log.Println("--shared-env-minimal flag active: adding shared-environment-safe tool set to include list")
 	case minimal:
 		preset = PresetMinimal
 		log.Println("--minimal flag active: adding minimal tool set to include list")

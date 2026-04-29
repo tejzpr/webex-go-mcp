@@ -37,14 +37,15 @@ func main() {
 	rootCmd.Flags().String("exclude", "", "Comma-separated list of tools to exclude (category:action format, e.g. messages:delete,rooms:delete). All tools except these will be registered. (env: WEBEX_EXCLUDE_TOOLS)")
 	rootCmd.Flags().Bool("minimal", false, "Enable a minimal tool set: messages, rooms, teams, meetings, and transcripts. Adds to --include. (env: WEBEX_MINIMAL)")
 	rootCmd.Flags().Bool("readonly-minimal", false, "Enable a readonly minimal tool set: only read/list/get operations for messages, rooms, teams, meetings, and transcripts. Adds to --include. (env: WEBEX_READONLY_MINIMAL)")
+	rootCmd.Flags().Bool("shared-env-minimal", false, "Enable a shared-environment-safe minimal tool set: person lookup and outbound message tools only. Adds to --include. (env: WEBEX_SHARED_ENV_MINIMAL)")
 
 	// HTTP mode flags
 	rootCmd.Flags().String("host", "localhost", "HTTP server bind host (env: WEBEX_HOST)")
 	rootCmd.Flags().Int("port", 8080, "HTTP server port (env: WEBEX_PORT)")
-	rootCmd.Flags().String("client-id", "", "Webex Integration Client ID (env: WEBEX_CLIENT_ID). Required for http mode.")
-	rootCmd.Flags().String("client-secret", "", "Webex Integration Client Secret (env: WEBEX_CLIENT_SECRET). Required for http mode.")
+	rootCmd.Flags().String("client-id", "", "Webex Integration Client ID (env: WEBEX_CLIENT_ID). Required for OAuth http mode.")
+	rootCmd.Flags().String("client-secret", "", "Webex Integration Client Secret (env: WEBEX_CLIENT_SECRET). Required for OAuth http mode.")
 	rootCmd.Flags().String("oauth-scopes", "spark:all", "Webex OAuth scopes (space-separated) (env: WEBEX_OAUTH_SCOPES)")
-	rootCmd.Flags().String("redirect-uri", "", "OAuth redirect URI registered with Webex (env: WEBEX_REDIRECT_URI). Required for http mode.")
+	rootCmd.Flags().String("redirect-uri", "", "OAuth redirect URI registered with Webex (env: WEBEX_REDIRECT_URI). Required for OAuth http mode.")
 	rootCmd.Flags().String("base-url", "", "External base URL of this MCP server (env: WEBEX_BASE_URL). Required for http mode. Example: http://localhost:8080")
 	rootCmd.Flags().String("auth-api-key", "", "Optional API key required on HTTP MCP requests via X-API-Key (env: WEBEX_AUTH_API_KEY)")
 	rootCmd.Flags().String("tls-cert", "", "Path to TLS certificate file (env: WEBEX_TLS_CERT)")
@@ -62,6 +63,7 @@ func main() {
 	_ = viper.BindPFlag("exclude_tools", rootCmd.Flags().Lookup("exclude"))
 	_ = viper.BindPFlag("minimal", rootCmd.Flags().Lookup("minimal"))
 	_ = viper.BindPFlag("readonly_minimal", rootCmd.Flags().Lookup("readonly-minimal"))
+	_ = viper.BindPFlag("shared_env_minimal", rootCmd.Flags().Lookup("shared-env-minimal"))
 	_ = viper.BindPFlag("host", rootCmd.Flags().Lookup("host"))
 	_ = viper.BindPFlag("port", rootCmd.Flags().Lookup("port"))
 	_ = viper.BindPFlag("client_id", rootCmd.Flags().Lookup("client-id"))
@@ -86,6 +88,7 @@ func main() {
 	_ = viper.BindEnv("exclude_tools", "WEBEX_EXCLUDE_TOOLS")
 	_ = viper.BindEnv("minimal", "WEBEX_MINIMAL")
 	_ = viper.BindEnv("readonly_minimal", "WEBEX_READONLY_MINIMAL")
+	_ = viper.BindEnv("shared_env_minimal", "WEBEX_SHARED_ENV_MINIMAL")
 	_ = viper.BindEnv("host", "WEBEX_HOST")
 	_ = viper.BindEnv("port", "WEBEX_PORT")
 	_ = viper.BindEnv("client_id", "WEBEX_CLIENT_ID")
@@ -118,6 +121,7 @@ func run(cmd *cobra.Command, args []string) error {
 	excludeTools := viper.GetString("exclude_tools")
 	minimal := viper.GetBool("minimal")
 	readonlyMinimal := viper.GetBool("readonly_minimal")
+	sharedEnvMinimal := viper.GetBool("shared_env_minimal")
 
 	sdkConfig := &webexsdk.Config{
 		BaseURL: webexAPIBaseURL,
@@ -126,15 +130,15 @@ func run(cmd *cobra.Command, args []string) error {
 
 	switch mode {
 	case "stdio":
-		return runSTDIO(sdkConfig, includeTools, excludeTools, minimal, readonlyMinimal)
+		return runSTDIO(sdkConfig, includeTools, excludeTools, minimal, readonlyMinimal, sharedEnvMinimal)
 	case "http":
-		return runHTTP(sdkConfig, includeTools, excludeTools, minimal, readonlyMinimal)
+		return runHTTP(sdkConfig, includeTools, excludeTools, minimal, readonlyMinimal, sharedEnvMinimal)
 	default:
 		return fmt.Errorf("invalid mode %q: must be 'stdio' or 'http'", mode)
 	}
 }
 
-func runSTDIO(sdkConfig *webexsdk.Config, include, exclude string, minimal, readonlyMinimal bool) error {
+func runSTDIO(sdkConfig *webexsdk.Config, include, exclude string, minimal, readonlyMinimal, sharedEnvMinimal bool) error {
 	accessToken := viper.GetString("access_token")
 	if accessToken == "" {
 		return fmt.Errorf("WEBEX_ACCESS_TOKEN environment variable or --access-token flag is required in stdio mode")
@@ -148,7 +152,7 @@ func runSTDIO(sdkConfig *webexsdk.Config, include, exclude string, minimal, read
 	resolver := auth.NewStaticClientResolver(webexClient)
 
 	log.Printf("Starting Webex MCP Server v%s in STDIO mode (base_url=%s, timeout=%s)", version, sdkConfig.BaseURL, sdkConfig.Timeout)
-	return startSTDIOServer(resolver, include, exclude, minimal, readonlyMinimal)
+	return startSTDIOServer(resolver, include, exclude, minimal, readonlyMinimal, sharedEnvMinimal)
 }
 
 func normalizeHTTPBaseURL(raw string) (string, error) {
@@ -176,7 +180,7 @@ func normalizeHTTPBaseURL(raw string) (string, error) {
 	return strings.TrimRight(parsed.String(), "/"), nil
 }
 
-func runHTTP(sdkConfig *webexsdk.Config, include, exclude string, minimal, readonlyMinimal bool) error {
+func runHTTP(sdkConfig *webexsdk.Config, include, exclude string, minimal, readonlyMinimal, sharedEnvMinimal bool) error {
 	accessToken := viper.GetString("access_token")
 	clientID := viper.GetString("client_id")
 	clientSecret := viper.GetString("client_secret")
@@ -249,10 +253,11 @@ func runHTTP(sdkConfig *webexsdk.Config, include, exclude string, minimal, reado
 			Type: storeType,
 			DSN:  storeDSN,
 		},
-		Include:         include,
-		Exclude:         exclude,
-		Minimal:         minimal,
-		ReadonlyMinimal: readonlyMinimal,
-		CORSOrigins:     corsOrigins,
+		Include:          include,
+		Exclude:          exclude,
+		Minimal:          minimal,
+		ReadonlyMinimal:  readonlyMinimal,
+		SharedEnvMinimal: sharedEnvMinimal,
+		CORSOrigins:      corsOrigins,
 	})
 }
