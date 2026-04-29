@@ -68,6 +68,7 @@ Configuration is loaded via environment variables and/or CLI flags. CLI flags ta
 | `WEBEX_ACCESS_TOKEN` | `--access-token` | Either (http) | - | Static server-side Webex token for HTTP mode without MCP OAuth. Used only when client ID and secret are not configured |
 | `WEBEX_REDIRECT_URI` | `--redirect-uri` | Yes for OAuth | - | OAuth redirect URI registered with Webex |
 | `WEBEX_BASE_URL` | `--base-url` | Yes (http) | - | External base URL of this MCP server, used for OAuth metadata and signed upload URLs. Localhost is supported, e.g. `http://localhost:8560` or `localhost:8560` |
+| `WEBEX_AUTH_API_KEY` | `--auth-api-key` | No | - | Optional API key required on `/mcp` requests via `X-API-Key`. Applies on top of OAuth or static-token mode |
 | `WEBEX_OAUTH_SCOPES` | `--oauth-scopes` | No | `spark:all` | Webex OAuth scopes (space-separated) |
 | `WEBEX_HOST` | `--host` | No | `localhost` | HTTP server bind host |
 | `WEBEX_PORT` | `--port` | No | `8080` | HTTP server port |
@@ -156,6 +157,18 @@ Static token mode:
 ```bash
 export WEBEX_ACCESS_TOKEN="your-token-here"
 ./webex-go-mcp --mode http --port 8080 --base-url http://localhost:8080
+```
+
+Optional MCP API-key guard:
+
+```bash
+export WEBEX_AUTH_API_KEY="your-mcp-api-key"
+```
+
+Clients must then send:
+
+```text
+X-API-Key: your-mcp-api-key
 ```
 
 #### Setting Up a Webex Integration (HTTP Mode)

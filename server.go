@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -83,6 +85,7 @@ type HTTPServerConfig struct {
 	TLSCert         string
 	TLSKey          string
 	BaseURL         string
+	AuthAPIKey      string
 	OAuthConfig     *auth.OAuthConfig
 	StaticResolver  auth.ClientResolver
 	WebexSDKConfig  *webexsdk.Config
@@ -132,7 +135,7 @@ func corsMiddleware(allowedOrigins string, next http.Handler) http.Handler {
 		}
 
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Mcp-Session-Id")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key, Mcp-Session-Id")
 		w.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id")
 
 		if r.Method == http.MethodOptions {
@@ -141,6 +144,32 @@ func corsMiddleware(allowedOrigins string, next http.Handler) http.Handler {
 		}
 
 		next.ServeHTTP(w, r)
+	})
+}
+
+func apiKeyMiddleware(apiKey string, next http.Handler) http.Handler {
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return next
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got := r.Header.Get("X-API-Key")
+		if subtle.ConstantTimeCompare([]byte(got), []byte(apiKey)) != 1 {
+			log.Printf("[APIKey] %s %s: missing or invalid X-API-Key", r.Method, r.URL.Path)
+			writeServerJSONError(w, http.StatusUnauthorized, "invalid_api_key", "X-API-Key is required")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func writeServerJSONError(w http.ResponseWriter, status int, code, description string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"error":             code,
+		"error_description": description,
 	})
 }
 
@@ -274,13 +303,15 @@ func startHTTPServer(cfg *HTTPServerConfig) error {
 	// Signed upload endpoint (unauthenticated; URLs are short-lived and HMAC-signed)
 	mux.Handle("/uploads/", uploadManager)
 
+	var mcpHandler http.Handler = streamableServer
 	if authMiddleware != nil {
 		// MCP endpoint (authenticated)
-		mux.Handle("/mcp", authMiddleware.Wrap(streamableServer))
+		mcpHandler = authMiddleware.Wrap(mcpHandler)
 	} else {
 		// MCP endpoint (unauthenticated; static server-side Webex token)
-		mux.Handle("/mcp", streamableServer)
+		mcpHandler = streamableServer
 	}
+	mux.Handle("/mcp", apiKeyMiddleware(cfg.AuthAPIKey, mcpHandler))
 
 	// Wrap with logging and CORS
 	corsOrigins := cfg.CORSOrigins

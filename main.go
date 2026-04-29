@@ -46,6 +46,7 @@ func main() {
 	rootCmd.Flags().String("oauth-scopes", "spark:all", "Webex OAuth scopes (space-separated) (env: WEBEX_OAUTH_SCOPES)")
 	rootCmd.Flags().String("redirect-uri", "", "OAuth redirect URI registered with Webex (env: WEBEX_REDIRECT_URI). Required for http mode.")
 	rootCmd.Flags().String("base-url", "", "External base URL of this MCP server (env: WEBEX_BASE_URL). Required for http mode. Example: http://localhost:8080")
+	rootCmd.Flags().String("auth-api-key", "", "Optional API key required on HTTP MCP requests via X-API-Key (env: WEBEX_AUTH_API_KEY)")
 	rootCmd.Flags().String("tls-cert", "", "Path to TLS certificate file (env: WEBEX_TLS_CERT)")
 	rootCmd.Flags().String("tls-key", "", "Path to TLS key file (env: WEBEX_TLS_KEY)")
 	rootCmd.Flags().String("store", "memory", "Store backend: 'memory' (default), 'sqlite', or 'postgres' (env: WEBEX_STORE)")
@@ -68,6 +69,7 @@ func main() {
 	_ = viper.BindPFlag("oauth_scopes", rootCmd.Flags().Lookup("oauth-scopes"))
 	_ = viper.BindPFlag("redirect_uri", rootCmd.Flags().Lookup("redirect-uri"))
 	_ = viper.BindPFlag("base_url", rootCmd.Flags().Lookup("base-url"))
+	_ = viper.BindPFlag("auth_api_key", rootCmd.Flags().Lookup("auth-api-key"))
 	_ = viper.BindPFlag("tls_cert", rootCmd.Flags().Lookup("tls-cert"))
 	_ = viper.BindPFlag("tls_key", rootCmd.Flags().Lookup("tls-key"))
 	_ = viper.BindPFlag("store", rootCmd.Flags().Lookup("store"))
@@ -91,6 +93,7 @@ func main() {
 	_ = viper.BindEnv("oauth_scopes", "WEBEX_OAUTH_SCOPES")
 	_ = viper.BindEnv("redirect_uri", "WEBEX_REDIRECT_URI")
 	_ = viper.BindEnv("base_url", "WEBEX_BASE_URL")
+	_ = viper.BindEnv("auth_api_key", "WEBEX_AUTH_API_KEY")
 	_ = viper.BindEnv("tls_cert", "WEBEX_TLS_CERT")
 	_ = viper.BindEnv("tls_key", "WEBEX_TLS_KEY")
 	_ = viper.BindEnv("store", "WEBEX_STORE")
@@ -180,6 +183,7 @@ func runHTTP(sdkConfig *webexsdk.Config, include, exclude string, minimal, reado
 	oauthScopes := viper.GetString("oauth_scopes")
 	redirectURI := viper.GetString("redirect_uri")
 	baseURL := viper.GetString("base_url")
+	authAPIKey := viper.GetString("auth_api_key")
 	host := viper.GetString("host")
 	port := viper.GetInt("port")
 	storeType := viper.GetString("store")
@@ -237,6 +241,7 @@ func runHTTP(sdkConfig *webexsdk.Config, include, exclude string, minimal, reado
 		TLSCert:        tlsCert,
 		TLSKey:         tlsKey,
 		BaseURL:        baseURL,
+		AuthAPIKey:     authAPIKey,
 		OAuthConfig:    oauthConfig,
 		StaticResolver: staticResolver,
 		WebexSDKConfig: sdkConfig,
