@@ -22,6 +22,8 @@ type MessageToolOptions struct {
 	Uploads            *UploadManager
 }
 
+const cardUploadURLPrefix = "mcp-upload://"
+
 func defaultMessageToolOptions() MessageToolOptions {
 	return MessageToolOptions{
 		AllowLocalFilePath: true,
@@ -105,6 +107,65 @@ func attachmentMultipleSourcesMessage(opts MessageToolOptions) string {
 		return "Provide exactly one of 'uploadId', 'fileBase64', or 'fileUrl' -- not multiple"
 	}
 	return "Provide exactly one of 'localFilePath', 'fileBase64', or 'fileUrl' -- not multiple"
+}
+
+func uploadToolDescription() string {
+	return "HTTP mode only. Request a short-lived signed URL for uploading a file to the MCP server without placing the file bytes in the LLM context.\n" +
+		"\n" +
+		"FLOW FOR MESSAGE ATTACHMENTS:\n" +
+		"1. Call this tool with the filename.\n" +
+		"2. Upload the file bytes to uploadUrl with HTTP PUT before expiresAt.\n" +
+		"3. Call webex_messages_send_attachment with uploadId.\n" +
+		"\n" +
+		"FLOW FOR ADAPTIVE CARD IMAGES:\n" +
+		"1. Call this tool with the image filename and contentType, then PUT the image bytes to uploadUrl.\n" +
+		"2. In cardJson, set the Adaptive Card Image url to \"mcp-upload://<uploadId>\".\n" +
+		"3. Call webex_messages_send_adaptive_card. The MCP server replaces that placeholder with a data URI before sending to Webex.\n" +
+		"\n" +
+		"Do not use the files URL returned by webex_messages_send_attachment inside an Adaptive Card image; Webex content URLs are authenticated download endpoints, not public image URLs. Use this for files in HTTP mode when the bytes are too large for base64 in the LLM context."
+}
+
+func adaptiveCardToolDescription(opts MessageToolOptions) string {
+	imageGuidance := "IMAGES AND MEDIA IN CARDS:\n"
+	if opts.Uploads != nil && !opts.AllowLocalFilePath {
+		imageGuidance += "For Image elements and any image 'url' fields in HTTP mode, use:\n" +
+			"BEST: mcp-upload placeholder (e.g. \"url\": \"mcp-upload://<uploadId>\") -- First call webex_uploads_request_url, upload the image bytes to uploadUrl with HTTP PUT, then place the returned uploadId in the card URL. The MCP server converts it to a data URI without putting base64 in the LLM context.\n" +
+			"OK: Public HTTPS URL (e.g. \"url\": \"https://example.com/img.png\") -- Must be anonymously accessible to Webex clients.\n" +
+			"SMALL IMAGES ONLY: data: URI (e.g. \"url\": \"data:image/png;base64,...\") -- Already embedded, passed through as-is. Large data URIs may exceed card/message limits.\n" +
+			"Do not use the files URL returned by webex_messages_send_attachment; those Webex content URLs require authentication and do not render as public card images.\n"
+	} else {
+		imageGuidance += "For Image elements and any 'url' fields in the card, you can use:\n" +
+			"BEST: Local file path (e.g. \"url\": \"/tmp/chart.png\") -- The MCP server automatically reads the file and converts it to an embedded base64 data URI. Use this for generated charts, saved images, etc.\n" +
+			"OK: Public HTTPS URL (e.g. \"url\": \"https://example.com/img.png\") -- Must be anonymously accessible to Webex clients.\n" +
+			"OK: data: URI (e.g. \"url\": \"data:image/png;base64,...\") -- Already embedded, passed through as-is.\n"
+	}
+
+	exampleImage := "- Image: {\"type\": \"Image\", \"url\": \"https://example.com/chart.png\"}"
+	if opts.Uploads != nil && !opts.AllowLocalFilePath {
+		exampleImage = "- Image: {\"type\": \"Image\", \"url\": \"mcp-upload://<uploadId>\"} (HTTP upload auto-converted)"
+	} else if opts.AllowLocalFilePath {
+		exampleImage = "- Image: {\"type\": \"Image\", \"url\": \"/tmp/chart.png\"} (local path auto-converted)"
+	}
+
+	return "Send an Adaptive Card message to a person or room in Webex.\n" +
+		"\n" +
+		"Adaptive Cards are rich, interactive UI cards that can contain text, images, buttons, inputs, and more. " +
+		"They are rendered natively in Webex clients.\n" +
+		"\n" +
+		"DESTINATION: Same as webex_messages_create -- use toPersonEmail for DMs (email is enough, no lookup needed), or roomId for group spaces.\n" +
+		"\n" +
+		"CARD FORMAT: Provide the card body as a JSON string in 'cardJson'. The JSON must follow the Adaptive Card schema " +
+		"(see https://adaptivecards.io/explorer/). At minimum it should have:\n" +
+		"  {\"type\": \"AdaptiveCard\", \"version\": \"1.3\", \"body\": [...]}\n" +
+		"\n" +
+		imageGuidance +
+		"\n" +
+		"EXAMPLES of body elements:\n" +
+		"- TextBlock: {\"type\": \"TextBlock\", \"text\": \"Hello!\", \"size\": \"large\", \"weight\": \"bolder\"}\n" +
+		exampleImage + "\n" +
+		"- ColumnSet, FactSet, ActionSet, Input.Text, Action.Submit, etc.\n" +
+		"\n" +
+		"IMPORTANT: Always confirm with the user before sending."
 }
 
 // RegisterMessageTools registers all message-related MCP tools.
@@ -310,14 +371,7 @@ func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver, options
 		// webex_uploads_request_url
 		s.AddTool(
 			mcp.NewTool("webex_uploads_request_url",
-				mcp.WithDescription("HTTP mode only. Request a short-lived signed URL for uploading a file to the MCP server without placing the file bytes in the LLM context.\n"+
-					"\n"+
-					"FLOW:\n"+
-					"1. Call this tool with the filename.\n"+
-					"2. Upload the file bytes to uploadUrl with HTTP PUT before expiresAt.\n"+
-					"3. Call webex_messages_send_attachment with uploadId.\n"+
-					"\n"+
-					"Use this for large files in HTTP mode."),
+				mcp.WithDescription(uploadToolDescription()),
 				mcp.WithString("fileName", mcp.Required(), mcp.Description("Filename to use for the uploaded attachment, e.g. 'report.pdf' or 'companies.csv'.")),
 				mcp.WithString("contentType", mcp.Description("Optional MIME type for the upload, e.g. 'application/pdf' or 'text/csv'. If omitted, the server infers it from the filename or uses application/octet-stream.")),
 			),
@@ -474,29 +528,7 @@ func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver, options
 	// webex_messages_send_adaptive_card
 	s.AddTool(
 		mcp.NewTool("webex_messages_send_adaptive_card",
-			mcp.WithDescription("Send an Adaptive Card message to a person or room in Webex.\n"+
-				"\n"+
-				"Adaptive Cards are rich, interactive UI cards that can contain text, images, buttons, inputs, and more. "+
-				"They are rendered natively in Webex clients.\n"+
-				"\n"+
-				"DESTINATION: Same as webex_messages_create -- use toPersonEmail for DMs (email is enough, no lookup needed), or roomId for group spaces.\n"+
-				"\n"+
-				"CARD FORMAT: Provide the card body as a JSON string in 'cardJson'. The JSON must follow the Adaptive Card schema "+
-				"(see https://adaptivecards.io/explorer/). At minimum it should have:\n"+
-				"  {\"type\": \"AdaptiveCard\", \"version\": \"1.3\", \"body\": [...]}\n"+
-				"\n"+
-				"IMAGES AND MEDIA IN CARDS:\n"+
-				"For Image elements and any 'url' fields in the card, you can use:\n"+
-				"\u2605 BEST: Local file path (e.g. \"url\": \"/tmp/chart.png\") -- The MCP server automatically reads the file and converts it to an embedded base64 data URI. Use this for generated charts, saved images, etc.\n"+
-				"\u2605 OK: Public URL (e.g. \"url\": \"https://example.com/img.png\") -- Must be publicly accessible.\n"+
-				"\u2605 OK: data: URI (e.g. \"url\": \"data:image/png;base64,...\") -- Already embedded, passed through as-is.\n"+
-				"\n"+
-				"EXAMPLES of body elements:\n"+
-				"- TextBlock: {\"type\": \"TextBlock\", \"text\": \"Hello!\", \"size\": \"large\", \"weight\": \"bolder\"}\n"+
-				"- Image: {\"type\": \"Image\", \"url\": \"/tmp/chart.png\"} (local path auto-converted)\n"+
-				"- ColumnSet, FactSet, ActionSet, Input.Text, Action.Submit, etc.\n"+
-				"\n"+
-				"IMPORTANT: Always confirm with the user before sending."),
+			mcp.WithDescription(adaptiveCardToolDescription(messageOptions)),
 			mcp.WithString("roomId", mcp.Description("Room/space ID. Use when sending to a group space or when you already have a roomId.")),
 			mcp.WithString("toPersonId", mcp.Description("Person ID for a direct 1:1 message. Use only if you already have it.")),
 			mcp.WithString("toPersonEmail", mcp.Description("Email address for a direct 1:1 message (e.g. 'alice@example.com'). No lookup needed.")),
@@ -529,9 +561,9 @@ func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver, options
 				return mcp.NewToolResultError(fmt.Sprintf("Invalid cardJson: %v", err)), nil
 			}
 
-			// Resolve any local file paths in url fields to base64 data URIs
-			if err := resolveLocalFileURLs(cardBody); err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("Failed to resolve local file paths in card: %v", err)), nil
+			// Resolve local file paths in STDIO mode and mcp-upload placeholders in HTTP mode.
+			if err := resolveCardURLs(cardBody, messageOptions); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to resolve URLs in card: %v", err)), nil
 			}
 
 			card := messages.NewAdaptiveCard(cardBody)
@@ -769,16 +801,19 @@ func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver, options
 	)
 }
 
-// resolveLocalFileURLs recursively walks a parsed JSON tree (from an Adaptive Card)
-// and replaces any "url" values that are local file paths with base64 data URIs.
-// Local paths start with "/" or "~/". HTTP(S) URLs and data: URIs are left as-is.
-func resolveLocalFileURLs(node interface{}) error {
+// resolveCardURLs recursively walks a parsed Adaptive Card JSON tree and
+// resolves supported URL placeholders before the card is sent to Webex.
+func resolveCardURLs(node interface{}, opts MessageToolOptions) error {
+	return resolveCardURLsWithCache(node, opts, make(map[string]string))
+}
+
+func resolveCardURLsWithCache(node interface{}, opts MessageToolOptions, uploadCache map[string]string) error {
 	switch v := node.(type) {
 	case map[string]interface{}:
-		// Check if this map has a "url" key with a local file path
+		// Check if this map has a "url" key with a supported local/upload value.
 		if urlVal, ok := v["url"]; ok {
 			if urlStr, ok := urlVal.(string); ok {
-				resolved, err := maybeResolveLocalPath(urlStr)
+				resolved, err := resolveCardURLValue(urlStr, opts, uploadCache)
 				if err != nil {
 					return err
 				}
@@ -787,18 +822,114 @@ func resolveLocalFileURLs(node interface{}) error {
 		}
 		// Recurse into all values
 		for _, val := range v {
-			if err := resolveLocalFileURLs(val); err != nil {
+			if err := resolveCardURLsWithCache(val, opts, uploadCache); err != nil {
 				return err
 			}
 		}
 	case []interface{}:
 		for _, item := range v {
-			if err := resolveLocalFileURLs(item); err != nil {
+			if err := resolveCardURLsWithCache(item, opts, uploadCache); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func resolveCardURLValue(urlStr string, opts MessageToolOptions, uploadCache map[string]string) (string, error) {
+	if strings.HasPrefix(urlStr, cardUploadURLPrefix) {
+		if opts.Uploads == nil {
+			return "", fmt.Errorf("%s URLs are only supported in HTTP mode", cardUploadURLPrefix)
+		}
+		return resolveUploadIDToDataURI(strings.TrimPrefix(urlStr, cardUploadURLPrefix), opts.Uploads, uploadCache)
+	}
+
+	if isLocalFileReference(urlStr) && !opts.AllowLocalFilePath {
+		return "", fmt.Errorf("local file path %q is only supported in STDIO mode; in HTTP mode, call webex_uploads_request_url and use %s<uploadId>", urlStr, cardUploadURLPrefix)
+	}
+
+	if opts.AllowLocalFilePath {
+		return maybeResolveLocalPath(urlStr)
+	}
+	return urlStr, nil
+}
+
+func resolveUploadIDToDataURI(uploadID string, uploads *UploadManager, uploadCache map[string]string) (string, error) {
+	uploadID = strings.TrimSpace(uploadID)
+	if uploadID == "" {
+		return "", fmt.Errorf("empty uploadId in %s URL", cardUploadURLPrefix)
+	}
+	if cached, ok := uploadCache[uploadID]; ok {
+		return cached, nil
+	}
+
+	upload, err := uploads.ConsumeUpload(uploadID)
+	if err != nil {
+		return "", fmt.Errorf("failed to use uploaded card image %q: %w", uploadID, err)
+	}
+	defer os.Remove(upload.Path)
+
+	fileBytes, err := os.ReadFile(upload.Path)
+	if err != nil {
+		return "", fmt.Errorf("failed to read uploaded card image %q: %w", uploadID, err)
+	}
+
+	mimeType := cardImageMIMEType(upload)
+	if !isSupportedAdaptiveCardImageType(mimeType) {
+		return "", fmt.Errorf("uploaded card image %q has unsupported content type %q; Adaptive Card images must be PNG, JPEG, or GIF", uploadID, mimeType)
+	}
+
+	encoded := base64.StdEncoding.EncodeToString(fileBytes)
+	dataURI := fmt.Sprintf("data:%s;base64,%s", mimeType, encoded)
+	uploadCache[uploadID] = dataURI
+	return dataURI, nil
+}
+
+func cardImageMIMEType(upload *PendingUpload) string {
+	if mimeType := supportedImageMIMEType(upload.ContentType); mimeType != "" {
+		return mimeType
+	}
+	if mimeType := supportedImageMIMEType(mime.TypeByExtension(filepath.Ext(upload.FileName))); mimeType != "" {
+		return mimeType
+	}
+	if upload.ContentType != "" {
+		return upload.ContentType
+	}
+	return "application/octet-stream"
+}
+
+func supportedImageMIMEType(mimeType string) string {
+	mimeType = strings.ToLower(strings.TrimSpace(strings.Split(mimeType, ";")[0]))
+	if mimeType == "image/jpg" {
+		return "image/jpeg"
+	}
+	if isSupportedAdaptiveCardImageType(mimeType) {
+		return mimeType
+	}
+	return ""
+}
+
+func isSupportedAdaptiveCardImageType(mimeType string) bool {
+	switch mimeType {
+	case "image/png", "image/jpeg", "image/jpg", "image/gif":
+		return true
+	default:
+		return false
+	}
+}
+
+func isLocalFileReference(urlStr string) bool {
+	if urlStr == "" ||
+		strings.HasPrefix(urlStr, "http://") ||
+		strings.HasPrefix(urlStr, "https://") ||
+		strings.HasPrefix(urlStr, "data:") ||
+		strings.HasPrefix(urlStr, cardUploadURLPrefix) {
+		return false
+	}
+	if strings.HasPrefix(urlStr, "~/") {
+		return true
+	}
+	return filepath.IsAbs(urlStr)
 }
 
 // maybeResolveLocalPath checks if a URL string is a local file path and, if so,

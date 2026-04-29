@@ -350,8 +350,8 @@ Add to your Cursor MCP configuration (`.cursor/mcp.json` in your project or `~/.
 
 - **`webex_messages_list`** -- List messages in a room (requires `roomId`). Enriched with room context, sender names, and file metadata.
 - **`webex_messages_create`** -- Send a text message. To DM someone, just pass `toPersonEmail` -- no room lookup needed. For group spaces, use `roomId`.
-- **`webex_messages_send_attachment`** -- Send a message with a file attachment (public URL). Same destination options as create.
-- **`webex_messages_send_adaptive_card`** -- Send an Adaptive Card to a room or person.
+- **`webex_messages_send_attachment`** -- Send a message with a file attachment. In HTTP mode, use `webex_uploads_request_url` + `uploadId` for local client files.
+- **`webex_messages_send_adaptive_card`** -- Send an Adaptive Card to a room or person. In HTTP mode, card image URLs can use `mcp-upload://<uploadId>` after `webex_uploads_request_url`; do not use Webex attachment `files` URLs as card images.
 - **`webex_messages_get`** -- Get a message by ID. Enriched with sender profile, room info, and file content (text files inline).
 - **`webex_messages_delete`** -- Delete a message by ID
 
