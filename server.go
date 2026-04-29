@@ -22,12 +22,19 @@ import (
 
 // registerTools creates the MCP server and registers all tool groups with the given resolver.
 // If mercuryMgr is non-nil, streaming tools (subscribe, unsubscribe, wait_for_message) are also registered.
-func registerTools(resolver auth.ClientResolver, include, exclude string, minimal, readonlyMinimal, sharedEnvMinimal bool, mercuryMgr *streaming.MercuryManager, messageOptions ...tools.MessageToolOptions) *server.MCPServer {
+func registerTools(resolver auth.ClientResolver, include, exclude string, minimal, readonlyMinimal, sharedEnvMinimal, enableMCPElicitation bool, mercuryMgr *streaming.MercuryManager, messageOptions ...tools.MessageToolOptions) *server.MCPServer {
+	serverOptions := []server.ServerOption{
+		server.WithToolCapabilities(false),
+		server.WithRecovery(),
+	}
+	if enableMCPElicitation {
+		serverOptions = append(serverOptions, server.WithElicitation())
+	}
+
 	s := server.NewMCPServer(
 		"webex-mcp",
 		version,
-		server.WithToolCapabilities(false),
-		server.WithRecovery(),
+		serverOptions...,
 	)
 
 	// Resolve preset flags into the include list
@@ -37,15 +44,19 @@ func registerTools(resolver auth.ClientResolver, include, exclude string, minima
 	filter := tools.NewToolFilter(include, exclude)
 	var registrar tools.ToolRegistrar
 
+	registrar = s
+	if enableMCPElicitation {
+		registrar = tools.NewElicitingRegistrar(s, registrar)
+		log.Println("MCP elicitation enabled: mutating Webex tools require user approval")
+	}
+
 	if filter.IsActive() {
-		fr := tools.NewFilteredRegistrar(s, filter)
+		fr := tools.NewFilteredRegistrar(registrar, filter)
 		registrar = fr
 		defer func() {
 			registered, skipped := fr.Stats()
 			log.Printf("Tool filtering active: %d registered, %d skipped", registered, skipped)
 		}()
-	} else {
-		registrar = s
 	}
 
 	// Register all tool groups
@@ -68,9 +79,9 @@ func registerTools(resolver auth.ClientResolver, include, exclude string, minima
 }
 
 // startSTDIOServer starts the MCP server in STDIO mode.
-func startSTDIOServer(resolver auth.ClientResolver, include, exclude string, minimal, readonlyMinimal, sharedEnvMinimal bool) error {
+func startSTDIOServer(resolver auth.ClientResolver, include, exclude string, minimal, readonlyMinimal, sharedEnvMinimal, enableMCPElicitation bool) error {
 	// Create MCPServer first, then wire up MercuryManager for streaming tools
-	s := registerTools(resolver, include, exclude, minimal, readonlyMinimal, sharedEnvMinimal, nil)
+	s := registerTools(resolver, include, exclude, minimal, readonlyMinimal, sharedEnvMinimal, enableMCPElicitation, nil)
 
 	// Create MercuryManager and register streaming tools (works in STDIO too)
 	mercuryMgr := streaming.NewMercuryManager(s)
@@ -81,23 +92,24 @@ func startSTDIOServer(resolver auth.ClientResolver, include, exclude string, min
 
 // HTTPServerConfig holds configuration for the HTTP mode.
 type HTTPServerConfig struct {
-	Host             string
-	Port             int
-	TLSCert          string
-	TLSKey           string
-	BaseURL          string
-	AuthAPIKey       string
-	OAuthConfig      *auth.OAuthConfig
-	StaticResolver   auth.ClientResolver
-	BotSendResolver  auth.ClientResolver
-	WebexSDKConfig   *webexsdk.Config
-	StoreConfig      auth.StoreConfig
-	Include          string
-	Exclude          string
-	Minimal          bool
-	ReadonlyMinimal  bool
-	SharedEnvMinimal bool
-	CORSOrigins      string
+	Host                 string
+	Port                 int
+	TLSCert              string
+	TLSKey               string
+	BaseURL              string
+	AuthAPIKey           string
+	OAuthConfig          *auth.OAuthConfig
+	StaticResolver       auth.ClientResolver
+	BotSendResolver      auth.ClientResolver
+	WebexSDKConfig       *webexsdk.Config
+	StoreConfig          auth.StoreConfig
+	Include              string
+	Exclude              string
+	Minimal              bool
+	ReadonlyMinimal      bool
+	SharedEnvMinimal     bool
+	EnableMCPElicitation bool
+	CORSOrigins          string
 }
 
 // requestLoggingMiddleware logs every incoming HTTP request for debugging.
@@ -264,7 +276,7 @@ func startHTTPServer(cfg *HTTPServerConfig) error {
 		messageOptions.SendResolver = cfg.BotSendResolver
 		messageOptions.LoggedInUserSender = resolver
 	}
-	mcpServer := registerTools(resolver, cfg.Include, cfg.Exclude, cfg.Minimal, cfg.ReadonlyMinimal, cfg.SharedEnvMinimal, nil, messageOptions)
+	mcpServer := registerTools(resolver, cfg.Include, cfg.Exclude, cfg.Minimal, cfg.ReadonlyMinimal, cfg.SharedEnvMinimal, cfg.EnableMCPElicitation, nil, messageOptions)
 
 	// Create MercuryManager for streaming tools (needs MCPServer for notifications)
 	mercuryMgr := streaming.NewMercuryManager(mcpServer)

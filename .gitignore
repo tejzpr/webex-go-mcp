@@ -2,3 +2,7 @@ webex-go-mcp
 .env
 .DS_Store
 *.sh
+.cursor
+.agents
+.windsurf
+.saras

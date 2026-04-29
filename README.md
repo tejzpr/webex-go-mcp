@@ -53,6 +53,7 @@ Configuration is loaded via environment variables and/or CLI flags. CLI flags ta
 | `WEBEX_MINIMAL` | `--minimal` | No | `false` | Enable minimal tool set |
 | `WEBEX_READONLY_MINIMAL` | `--readonly-minimal` | No | `false` | Enable readonly minimal tool set |
 | `WEBEX_SHARED_ENV_MINIMAL` | `--shared-env-minimal` | No | `false` | Enable shared-environment-safe minimal tool set |
+| `WEBEX_ENABLE_MCP_ELICITATION` | `--enable-mcp-elicitation` | No | `false` | Require MCP elicitation approval before mutating Webex tools run. If the client does not support elicitation, protected actions fail closed |
 
 ### STDIO Mode Options
 
@@ -84,6 +85,8 @@ You can control which tools are exposed using `--include` or `--exclude`. Tools 
 Both singular and plural category forms are accepted (`message:list` and `messages:list` both work).
 
 The `category:action` shorthand maps to the full tool name `webex_{category}_{action}`. For example, `messages:list` maps to `webex_messages_list`.
+
+When `WEBEX_ENABLE_MCP_ELICITATION=true`, tools that send, create, update, patch, or delete Webex resources request MCP elicitation approval before calling Webex. Read/list/get/search/download tools do not require elicitation. If the connected MCP client does not support elicitation, protected actions are not performed.
 
 **Rules:**
 - If `--include` is set, only the specified tools are registered.
