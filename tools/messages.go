@@ -16,8 +16,104 @@ import (
 	"github.com/tejzpr/webex-go-mcp/auth"
 )
 
+// MessageToolOptions controls transport-specific message tool behavior.
+type MessageToolOptions struct {
+	AllowLocalFilePath bool
+	Uploads            *UploadManager
+}
+
+func defaultMessageToolOptions() MessageToolOptions {
+	return MessageToolOptions{
+		AllowLocalFilePath: true,
+	}
+}
+
+func attachmentToolDescription(opts MessageToolOptions) string {
+	if opts.Uploads != nil && !opts.AllowLocalFilePath {
+		return "Send a message with a file attachment to a person or room in Webex.\n" +
+			"\n" +
+			"DESTINATION: Same as webex_messages_create -- use toPersonEmail for DMs (email is enough, no lookup needed), or roomId for group spaces.\n" +
+			"\n" +
+			"HOW TO ATTACH A FILE IN HTTP MODE (provide exactly one approach):\n" +
+			"\n" +
+			"BEST: uploadId -- First call webex_uploads_request_url with the filename, upload the file bytes to the returned uploadUrl with HTTP PUT, then pass the returned uploadId here. Use this when the file already exists on the MCP client's filesystem or is too large for base64.\n" +
+			"\n" +
+			"SMALL FILES ONLY: fileBase64 + fileName -- Base64-encode the file content and provide a filename. Use this only for small generated content. Large base64 strings may be truncated by LLM output limits.\n" +
+			"\n" +
+			"FALLBACK ONLY: fileUrl -- A publicly accessible URL. Use this ONLY if you have a confirmed publicly reachable URL. Most URLs (internal, auth-gated, VPN-only, localhost) will FAIL because Webex servers must be able to download the file directly. When in doubt, use uploadId instead.\n" +
+			"\n" +
+			"You can optionally include a text or markdown message along with the file.\n" +
+			"\n" +
+			"LIMITATIONS:\n" +
+			"- One file per message.\n" +
+			"- Max file size: 100MB.\n" +
+			"\n" +
+			"IMPORTANT: Always confirm with the user before sending."
+	}
+
+	return "Send a message with a file attachment to a person or room in Webex.\n" +
+		"\n" +
+		"DESTINATION: Same as webex_messages_create -- use toPersonEmail for DMs (email is enough, no lookup needed), or roomId for group spaces.\n" +
+		"\n" +
+		"HOW TO ATTACH A FILE (provide exactly one approach):\n" +
+		"\n" +
+		"★ BEST: localFilePath -- Absolute path to a file on the local filesystem. The MCP server reads the file and uploads it directly. Use this when the file already exists on disk (e.g. saved charts, downloaded files, generated reports). This avoids base64 encoding overhead and LLM output token limits.\n" +
+		"\n" +
+		"★ PREFERRED: fileBase64 + fileName -- Base64-encode the file content and provide a filename. Use this for small generated content that isn't saved to disk. Be aware that very large base64 strings may be truncated by LLM output limits.\n" +
+		"\n" +
+		"⚠ FALLBACK ONLY: fileUrl -- A publicly accessible URL. Use this ONLY if you have a confirmed publicly reachable URL. Most URLs (internal, auth-gated, VPN-only, localhost) will FAIL because Webex servers must be able to download the file directly. When in doubt, use localFilePath or fileBase64 instead.\n" +
+		"\n" +
+		"You can optionally include a text or markdown message along with the file.\n" +
+		"\n" +
+		"LIMITATIONS:\n" +
+		"- One file per message.\n" +
+		"- Max file size: 100MB.\n" +
+		"\n" +
+		"IMPORTANT: Always confirm with the user before sending."
+}
+
+func attachmentBase64Description(opts MessageToolOptions) string {
+	if opts.Uploads != nil && !opts.AllowLocalFilePath {
+		return "Use only for small files. Base64-encoded file content. Use with 'fileName' to upload directly. Large files may hit LLM output token limits -- prefer uploadId in HTTP mode. Provide ONLY this+fileName, OR uploadId, OR fileUrl."
+	}
+	return "PREFERRED for in-memory content. Base64-encoded file content. Use with 'fileName' to upload directly. Works regardless of URL accessibility but large files may hit LLM output token limits — prefer localFilePath for large files. Provide ONLY this+fileName, OR localFilePath, OR fileUrl."
+}
+
+func attachmentFileNameDescription(opts MessageToolOptions) string {
+	if opts.Uploads != nil && !opts.AllowLocalFilePath {
+		return "Filename for the upload (e.g. 'report.pdf', 'data.csv'). Required when using fileBase64. Optional with uploadId (defaults to the filename used when requesting the upload URL)."
+	}
+	return "Filename for the upload (e.g. 'report.pdf', 'data.csv'). Required when using fileBase64. Optional with localFilePath (defaults to the file's actual name)."
+}
+
+func attachmentFileURLDescription(opts MessageToolOptions) string {
+	if opts.Uploads != nil && !opts.AllowLocalFilePath {
+		return "FALLBACK ONLY. A publicly accessible URL of the file to attach. Use ONLY if you have a confirmed publicly reachable URL (no auth, no VPN, no internal network). Most URLs will fail. Prefer uploadId or fileBase64+fileName instead. Provide ONLY this, OR uploadId, OR fileBase64+fileName."
+	}
+	return "FALLBACK ONLY. A publicly accessible URL of the file to attach. Use ONLY if you have a confirmed publicly reachable URL (no auth, no VPN, no internal network). Most URLs will fail. Prefer localFilePath or fileBase64+fileName instead. Provide ONLY this, OR localFilePath, OR fileBase64+fileName."
+}
+
+func attachmentMissingSourceMessage(opts MessageToolOptions) string {
+	if opts.Uploads != nil && !opts.AllowLocalFilePath {
+		return "One of 'uploadId', 'fileBase64' + 'fileName', or 'fileUrl' is required"
+	}
+	return "One of 'localFilePath', 'fileBase64' + 'fileName', or 'fileUrl' is required"
+}
+
+func attachmentMultipleSourcesMessage(opts MessageToolOptions) string {
+	if opts.Uploads != nil && !opts.AllowLocalFilePath {
+		return "Provide exactly one of 'uploadId', 'fileBase64', or 'fileUrl' -- not multiple"
+	}
+	return "Provide exactly one of 'localFilePath', 'fileBase64', or 'fileUrl' -- not multiple"
+}
+
 // RegisterMessageTools registers all message-related MCP tools.
-func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver) {
+func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver, options ...MessageToolOptions) {
+	messageOptions := defaultMessageToolOptions()
+	if len(options) > 0 {
+		messageOptions = options[0]
+	}
+
 	// webex_messages_list
 	s.AddTool(
 		mcp.NewTool("webex_messages_list",
@@ -210,38 +306,64 @@ func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver) {
 		},
 	)
 
+	if messageOptions.Uploads != nil {
+		// webex_uploads_request_url
+		s.AddTool(
+			mcp.NewTool("webex_uploads_request_url",
+				mcp.WithDescription("HTTP mode only. Request a short-lived signed URL for uploading a file to the MCP server without placing the file bytes in the LLM context.\n"+
+					"\n"+
+					"FLOW:\n"+
+					"1. Call this tool with the filename.\n"+
+					"2. Upload the file bytes to uploadUrl with HTTP PUT before expiresAt.\n"+
+					"3. Call webex_messages_send_attachment with uploadId.\n"+
+					"\n"+
+					"Use this for large files in HTTP mode."),
+				mcp.WithString("fileName", mcp.Required(), mcp.Description("Filename to use for the uploaded attachment, e.g. 'report.pdf' or 'companies.csv'.")),
+				mcp.WithString("contentType", mcp.Description("Optional MIME type for the upload, e.g. 'application/pdf' or 'text/csv'. If omitted, the server infers it from the filename or uses application/octet-stream.")),
+			),
+			func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				fileName, err := req.RequireString("fileName")
+				if err != nil {
+					return mcp.NewToolResultError(err.Error()), nil
+				}
+
+				reservation, err := messageOptions.Uploads.RequestUpload(fileName, req.GetString("contentType", ""))
+				if err != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to create upload URL: %v", err)), nil
+				}
+
+				data, _ := json.MarshalIndent(reservation, "", "  ")
+				return mcp.NewToolResultText(string(data)), nil
+			},
+		)
+	}
+
 	// webex_messages_send_attachment
-	s.AddTool(
-		mcp.NewTool("webex_messages_send_attachment",
-			mcp.WithDescription("Send a message with a file attachment to a person or room in Webex.\n"+
-				"\n"+
-				"DESTINATION: Same as webex_messages_create -- use toPersonEmail for DMs (email is enough, no lookup needed), or roomId for group spaces.\n"+
-				"\n"+
-				"HOW TO ATTACH A FILE (provide exactly one approach):\n"+
-				"\n"+
-				"★ BEST: localFilePath -- Absolute path to a file on the local filesystem. The MCP server reads the file and uploads it directly. Use this when the file already exists on disk (e.g. saved charts, downloaded files, generated reports). This avoids base64 encoding overhead and LLM output token limits.\n"+
-				"\n"+
-				"★ PREFERRED: fileBase64 + fileName -- Base64-encode the file content and provide a filename. Use this for small generated content that isn't saved to disk. Be aware that very large base64 strings may be truncated by LLM output limits.\n"+
-				"\n"+
-				"⚠ FALLBACK ONLY: fileUrl -- A publicly accessible URL. Use this ONLY if you have a confirmed publicly reachable URL. Most URLs (internal, auth-gated, VPN-only, localhost) will FAIL because Webex servers must be able to download the file directly. When in doubt, use localFilePath or fileBase64 instead.\n"+
-				"\n"+
-				"You can optionally include a text or markdown message along with the file.\n"+
-				"\n"+
-				"LIMITATIONS:\n"+
-				"- One file per message.\n"+
-				"- Max file size: 100MB.\n"+
-				"\n"+
-				"IMPORTANT: Always confirm with the user before sending."),
-			mcp.WithString("roomId", mcp.Description("Room/space ID. Use when sending to a group space or when you already have a roomId.")),
-			mcp.WithString("toPersonId", mcp.Description("Person ID for a direct 1:1 message. Use only if you already have it.")),
-			mcp.WithString("toPersonEmail", mcp.Description("Email address for a direct 1:1 message (e.g. 'alice@example.com'). No lookup needed.")),
+	attachmentOpts := []mcp.ToolOption{
+		mcp.WithDescription(attachmentToolDescription(messageOptions)),
+		mcp.WithString("roomId", mcp.Description("Room/space ID. Use when sending to a group space or when you already have a roomId.")),
+		mcp.WithString("toPersonId", mcp.Description("Person ID for a direct 1:1 message. Use only if you already have it.")),
+		mcp.WithString("toPersonEmail", mcp.Description("Email address for a direct 1:1 message (e.g. 'alice@example.com'). No lookup needed.")),
+	}
+	if messageOptions.AllowLocalFilePath {
+		attachmentOpts = append(attachmentOpts,
 			mcp.WithString("localFilePath", mcp.Description("BEST option. Absolute path to a file on the local filesystem (e.g. '/tmp/report.pdf', '/Users/me/chart.png'). The MCP server reads the file and uploads it directly to Webex. Use this when the file exists on disk — it avoids base64 encoding and LLM token limits. Provide ONLY this, OR fileBase64+fileName, OR fileUrl.")),
-			mcp.WithString("fileBase64", mcp.Description("PREFERRED for in-memory content. Base64-encoded file content. Use with 'fileName' to upload directly. Works regardless of URL accessibility but large files may hit LLM output token limits — prefer localFilePath for large files. Provide ONLY this+fileName, OR localFilePath, OR fileUrl.")),
-			mcp.WithString("fileName", mcp.Description("Filename for the upload (e.g. 'report.pdf', 'data.csv'). Required when using fileBase64. Optional with localFilePath (defaults to the file's actual name).")),
-			mcp.WithString("fileUrl", mcp.Description("FALLBACK ONLY. A publicly accessible URL of the file to attach. Use ONLY if you have a confirmed publicly reachable URL (no auth, no VPN, no internal network). Most URLs will fail. Prefer localFilePath or fileBase64+fileName instead. Provide ONLY this, OR localFilePath, OR fileBase64+fileName.")),
-			mcp.WithString("text", mcp.Description("Optional plain text message to include with the file.")),
-			mcp.WithString("markdown", mcp.Description("Optional rich text message (Webex markdown) to include with the file.")),
-		),
+		)
+	}
+	if messageOptions.Uploads != nil {
+		attachmentOpts = append(attachmentOpts,
+			mcp.WithString("uploadId", mcp.Description("BEST option in HTTP mode. First call webex_uploads_request_url, upload the file bytes to uploadUrl with HTTP PUT, then pass the returned uploadId here. Provide ONLY this, OR fileBase64+fileName, OR fileUrl.")),
+		)
+	}
+	attachmentOpts = append(attachmentOpts,
+		mcp.WithString("fileBase64", mcp.Description(attachmentBase64Description(messageOptions))),
+		mcp.WithString("fileName", mcp.Description(attachmentFileNameDescription(messageOptions))),
+		mcp.WithString("fileUrl", mcp.Description(attachmentFileURLDescription(messageOptions))),
+		mcp.WithString("text", mcp.Description("Optional plain text message to include with the file.")),
+		mcp.WithString("markdown", mcp.Description("Optional rich text message (Webex markdown) to include with the file.")),
+	)
+	s.AddTool(
+		mcp.NewTool("webex_messages_send_attachment", attachmentOpts...),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			client, err := resolver(ctx)
 			if err != nil {
@@ -261,13 +383,24 @@ func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			}
 
 			localFilePath := req.GetString("localFilePath", "")
+			uploadID := req.GetString("uploadId", "")
 			fileBase64 := req.GetString("fileBase64", "")
 			fileName := req.GetString("fileName", "")
 			fileURL := req.GetString("fileUrl", "")
 
+			if localFilePath != "" && !messageOptions.AllowLocalFilePath {
+				return mcp.NewToolResultError("'localFilePath' is only supported in STDIO mode. In HTTP mode, use webex_uploads_request_url and pass the returned 'uploadId'."), nil
+			}
+			if uploadID != "" && messageOptions.Uploads == nil {
+				return mcp.NewToolResultError("'uploadId' is only supported in HTTP mode. In STDIO mode, use 'localFilePath' for files that exist on disk."), nil
+			}
+
 			// Count how many file source approaches were provided
 			sourceCount := 0
 			if localFilePath != "" {
+				sourceCount++
+			}
+			if uploadID != "" {
 				sourceCount++
 			}
 			if fileBase64 != "" {
@@ -278,10 +411,10 @@ func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver) {
 			}
 
 			if sourceCount == 0 {
-				return mcp.NewToolResultError("One of 'localFilePath', 'fileBase64' + 'fileName', or 'fileUrl' is required"), nil
+				return mcp.NewToolResultError(attachmentMissingSourceMessage(messageOptions)), nil
 			}
 			if sourceCount > 1 {
-				return mcp.NewToolResultError("Provide exactly one of 'localFilePath', 'fileBase64', or 'fileUrl' -- not multiple"), nil
+				return mcp.NewToolResultError(attachmentMultipleSourcesMessage(messageOptions)), nil
 			}
 
 			var result *messages.Message
@@ -294,6 +427,24 @@ func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver) {
 				}
 				if fileName == "" {
 					fileName = filepath.Base(localFilePath)
+				}
+				result, err = client.Messages().CreateWithAttachment(msg, &messages.FileUpload{
+					FileName:  fileName,
+					FileBytes: fileBytes,
+				})
+			} else if uploadID != "" {
+				upload, consumeErr := messageOptions.Uploads.ConsumeUpload(uploadID)
+				if consumeErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to use uploaded file: %v", consumeErr)), nil
+				}
+				defer os.Remove(upload.Path)
+
+				fileBytes, readErr := os.ReadFile(upload.Path)
+				if readErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to read uploaded file for uploadId '%s': %v", uploadID, readErr)), nil
+				}
+				if fileName == "" {
+					fileName = upload.FileName
 				}
 				result, err = client.Messages().CreateWithAttachment(msg, &messages.FileUpload{
 					FileName:  fileName,

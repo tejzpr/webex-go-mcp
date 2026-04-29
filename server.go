@@ -20,7 +20,7 @@ import (
 
 // registerTools creates the MCP server and registers all tool groups with the given resolver.
 // If mercuryMgr is non-nil, streaming tools (subscribe, unsubscribe, wait_for_message) are also registered.
-func registerTools(resolver auth.ClientResolver, include, exclude string, minimal, readonlyMinimal bool, mercuryMgr *streaming.MercuryManager) *server.MCPServer {
+func registerTools(resolver auth.ClientResolver, include, exclude string, minimal, readonlyMinimal bool, mercuryMgr *streaming.MercuryManager, messageOptions ...tools.MessageToolOptions) *server.MCPServer {
 	s := server.NewMCPServer(
 		"webex-mcp",
 		version,
@@ -47,7 +47,7 @@ func registerTools(resolver auth.ClientResolver, include, exclude string, minima
 	}
 
 	// Register all tool groups
-	tools.RegisterMessageTools(registrar, resolver)
+	tools.RegisterMessageTools(registrar, resolver, messageOptions...)
 	tools.RegisterRoomTools(registrar, resolver)
 	tools.RegisterTeamTools(registrar, resolver)
 	tools.RegisterMembershipTools(registrar, resolver)
@@ -82,6 +82,7 @@ type HTTPServerConfig struct {
 	Port            int
 	TLSCert         string
 	TLSKey          string
+	BaseURL         string
 	OAuthConfig     *auth.OAuthConfig
 	WebexSDKConfig  *webexsdk.Config
 	StoreConfig     auth.StoreConfig
@@ -129,7 +130,7 @@ func corsMiddleware(allowedOrigins string, next http.Handler) http.Handler {
 			}
 		}
 
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Mcp-Session-Id")
 		w.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id")
 
@@ -151,6 +152,29 @@ func truncateHeader(value string, maxLen int) string {
 		return value[:maxLen] + "..."
 	}
 	return value
+}
+
+func uploadBaseURL(cfg *HTTPServerConfig) string {
+	if cfg.BaseURL != "" {
+		return strings.TrimRight(cfg.BaseURL, "/")
+	}
+	if cfg.OAuthConfig != nil && cfg.OAuthConfig.ServerURL != "" {
+		return strings.TrimRight(cfg.OAuthConfig.ServerURL, "/")
+	}
+
+	scheme := "http"
+	if cfg.TLSCert != "" && cfg.TLSKey != "" {
+		scheme = "https"
+	}
+
+	host := cfg.Host
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "localhost"
+	}
+	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
+		host = "[" + host + "]"
+	}
+	return fmt.Sprintf("%s://%s:%d", scheme, host, cfg.Port)
 }
 
 // startHTTPServer starts the MCP server in HTTP mode with OAuth 2.1 support.
@@ -179,9 +203,18 @@ func startHTTPServer(cfg *HTTPServerConfig) error {
 	// Create the HTTP client resolver
 	resolver := auth.NewHTTPClientResolver()
 
+	uploadManager, err := tools.NewUploadManager(uploadBaseURL(cfg), "", 0)
+	if err != nil {
+		return fmt.Errorf("failed to create upload manager: %w", err)
+	}
+	defer uploadManager.Close()
+
 	// Register tools with the resolver.
 	// MercuryManager needs the MCPServer ref, so we pass nil first, then register streaming tools after.
-	mcpServer := registerTools(resolver, cfg.Include, cfg.Exclude, cfg.Minimal, cfg.ReadonlyMinimal, nil)
+	mcpServer := registerTools(resolver, cfg.Include, cfg.Exclude, cfg.Minimal, cfg.ReadonlyMinimal, nil, tools.MessageToolOptions{
+		AllowLocalFilePath: false,
+		Uploads:            uploadManager,
+	})
 
 	// Create MercuryManager for streaming tools (needs MCPServer for notifications)
 	mercuryMgr := streaming.NewMercuryManager(mcpServer)
@@ -221,6 +254,9 @@ func startHTTPServer(cfg *HTTPServerConfig) error {
 
 	// Dynamic Client Registration (unauthenticated)
 	mux.HandleFunc("/register", auth.HandleRegister(store))
+
+	// Signed upload endpoint (unauthenticated; URLs are short-lived and HMAC-signed)
+	mux.Handle("/uploads/", uploadManager)
 
 	// MCP endpoint (authenticated)
 	mux.Handle("/mcp", authMiddleware.Wrap(streamableServer))

@@ -155,6 +155,7 @@ var (
 	// Excludes memberships and webhooks.
 	PresetMinimal = []string{
 		"webex_messages_list", "webex_messages_create", "webex_messages_send_attachment", "webex_messages_send_adaptive_card", "webex_messages_get", "webex_messages_delete",
+		"webex_uploads_request_url",
 		"webex_find_messages_like_in_room",
 		"webex_rooms_list", "webex_rooms_create", "webex_rooms_get", "webex_rooms_update", "webex_rooms_delete",
 		"webex_room_find_by_name", "webex_room_find_like_name",

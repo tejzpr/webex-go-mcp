@@ -3,12 +3,14 @@ package main
 import (
 	"fmt"
 	"log"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
-	"github.com/tejzpr/webex-go-mcp/auth"
 	webex "github.com/WebexCommunity/webex-go-sdk/v2"
 	"github.com/WebexCommunity/webex-go-sdk/v2/webexsdk"
+	"github.com/tejzpr/webex-go-mcp/auth"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -29,7 +31,7 @@ func main() {
 	// Define flags
 	rootCmd.Flags().String("mode", "stdio", "Server mode: 'stdio' (default) or 'http' (env: WEBEX_MODE)")
 	rootCmd.Flags().String("access-token", "", "Webex API access token (env: WEBEX_ACCESS_TOKEN). Required for stdio mode.")
-	rootCmd.Flags().String("base-url", "https://webexapis.com/v1", "Webex API base URL (env: WEBEX_BASE_URL)")
+	rootCmd.Flags().String("webex-api-base-url", "https://webexapis.com/v1", "Webex API base URL (env: WEBEX_API_BASE_URL)")
 	rootCmd.Flags().Duration("timeout", 30*time.Second, "HTTP request timeout (env: WEBEX_TIMEOUT)")
 	rootCmd.Flags().String("include", "", "Comma-separated list of tools to include (category:action format, e.g. messages:list,meetings:create). Only these tools will be registered. (env: WEBEX_INCLUDE_TOOLS)")
 	rootCmd.Flags().String("exclude", "", "Comma-separated list of tools to exclude (category:action format, e.g. messages:delete,rooms:delete). All tools except these will be registered. (env: WEBEX_EXCLUDE_TOOLS)")
@@ -43,7 +45,7 @@ func main() {
 	rootCmd.Flags().String("client-secret", "", "Webex Integration Client Secret (env: WEBEX_CLIENT_SECRET). Required for http mode.")
 	rootCmd.Flags().String("oauth-scopes", "spark:all", "Webex OAuth scopes (space-separated) (env: WEBEX_OAUTH_SCOPES)")
 	rootCmd.Flags().String("redirect-uri", "", "OAuth redirect URI registered with Webex (env: WEBEX_REDIRECT_URI). Required for http mode.")
-	rootCmd.Flags().String("server-url", "", "External base URL of this server (env: WEBEX_SERVER_URL). Required for http mode. Example: http://localhost:8080")
+	rootCmd.Flags().String("base-url", "", "External base URL of this MCP server (env: WEBEX_BASE_URL). Required for http mode. Example: http://localhost:8080")
 	rootCmd.Flags().String("tls-cert", "", "Path to TLS certificate file (env: WEBEX_TLS_CERT)")
 	rootCmd.Flags().String("tls-key", "", "Path to TLS key file (env: WEBEX_TLS_KEY)")
 	rootCmd.Flags().String("store", "memory", "Store backend: 'memory' (default), 'sqlite', or 'postgres' (env: WEBEX_STORE)")
@@ -53,7 +55,7 @@ func main() {
 	// Bind flags to viper
 	_ = viper.BindPFlag("mode", rootCmd.Flags().Lookup("mode"))
 	_ = viper.BindPFlag("access_token", rootCmd.Flags().Lookup("access-token"))
-	_ = viper.BindPFlag("base_url", rootCmd.Flags().Lookup("base-url"))
+	_ = viper.BindPFlag("webex_api_base_url", rootCmd.Flags().Lookup("webex-api-base-url"))
 	_ = viper.BindPFlag("timeout", rootCmd.Flags().Lookup("timeout"))
 	_ = viper.BindPFlag("include_tools", rootCmd.Flags().Lookup("include"))
 	_ = viper.BindPFlag("exclude_tools", rootCmd.Flags().Lookup("exclude"))
@@ -65,7 +67,7 @@ func main() {
 	_ = viper.BindPFlag("client_secret", rootCmd.Flags().Lookup("client-secret"))
 	_ = viper.BindPFlag("oauth_scopes", rootCmd.Flags().Lookup("oauth-scopes"))
 	_ = viper.BindPFlag("redirect_uri", rootCmd.Flags().Lookup("redirect-uri"))
-	_ = viper.BindPFlag("server_url", rootCmd.Flags().Lookup("server-url"))
+	_ = viper.BindPFlag("base_url", rootCmd.Flags().Lookup("base-url"))
 	_ = viper.BindPFlag("tls_cert", rootCmd.Flags().Lookup("tls-cert"))
 	_ = viper.BindPFlag("tls_key", rootCmd.Flags().Lookup("tls-key"))
 	_ = viper.BindPFlag("store", rootCmd.Flags().Lookup("store"))
@@ -76,7 +78,7 @@ func main() {
 	viper.SetEnvPrefix("WEBEX")
 	_ = viper.BindEnv("mode", "WEBEX_MODE")
 	_ = viper.BindEnv("access_token", "WEBEX_ACCESS_TOKEN")
-	_ = viper.BindEnv("base_url", "WEBEX_BASE_URL")
+	_ = viper.BindEnv("webex_api_base_url", "WEBEX_API_BASE_URL")
 	_ = viper.BindEnv("timeout", "WEBEX_TIMEOUT")
 	_ = viper.BindEnv("include_tools", "WEBEX_INCLUDE_TOOLS")
 	_ = viper.BindEnv("exclude_tools", "WEBEX_EXCLUDE_TOOLS")
@@ -88,7 +90,7 @@ func main() {
 	_ = viper.BindEnv("client_secret", "WEBEX_CLIENT_SECRET")
 	_ = viper.BindEnv("oauth_scopes", "WEBEX_OAUTH_SCOPES")
 	_ = viper.BindEnv("redirect_uri", "WEBEX_REDIRECT_URI")
-	_ = viper.BindEnv("server_url", "WEBEX_SERVER_URL")
+	_ = viper.BindEnv("base_url", "WEBEX_BASE_URL")
 	_ = viper.BindEnv("tls_cert", "WEBEX_TLS_CERT")
 	_ = viper.BindEnv("tls_key", "WEBEX_TLS_KEY")
 	_ = viper.BindEnv("store", "WEBEX_STORE")
@@ -105,7 +107,7 @@ func run(cmd *cobra.Command, args []string) error {
 	log.SetOutput(os.Stderr)
 
 	mode := viper.GetString("mode")
-	baseURL := viper.GetString("base_url")
+	webexAPIBaseURL := viper.GetString("webex_api_base_url")
 	timeout := viper.GetDuration("timeout")
 
 	// Tool filtering (shared between modes)
@@ -115,7 +117,7 @@ func run(cmd *cobra.Command, args []string) error {
 	readonlyMinimal := viper.GetBool("readonly_minimal")
 
 	sdkConfig := &webexsdk.Config{
-		BaseURL: baseURL,
+		BaseURL: webexAPIBaseURL,
 		Timeout: timeout,
 	}
 
@@ -146,19 +148,44 @@ func runSTDIO(sdkConfig *webexsdk.Config, include, exclude string, minimal, read
 	return startSTDIOServer(resolver, include, exclude, minimal, readonlyMinimal)
 }
 
+func normalizeHTTPBaseURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", fmt.Errorf("value is empty")
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("scheme must be http or https")
+	}
+	if parsed.Host == "" {
+		return "", fmt.Errorf("host is required")
+	}
+
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return strings.TrimRight(parsed.String(), "/"), nil
+}
+
 func runHTTP(sdkConfig *webexsdk.Config, include, exclude string, minimal, readonlyMinimal bool) error {
 	clientID := viper.GetString("client_id")
 	clientSecret := viper.GetString("client_secret")
 	oauthScopes := viper.GetString("oauth_scopes")
 	redirectURI := viper.GetString("redirect_uri")
-	serverURL := viper.GetString("server_url")
+	baseURL := viper.GetString("base_url")
 	host := viper.GetString("host")
 	port := viper.GetInt("port")
-	tlsCert := viper.GetString("tls_cert")
-	tlsKey := viper.GetString("tls_key")
 	storeType := viper.GetString("store")
 	storeDSN := viper.GetString("store_dsn")
 	corsOrigins := viper.GetString("cors_origins")
+	tlsCert := viper.GetString("tls_cert")
+	tlsKey := viper.GetString("tls_key")
 
 	// Validate required HTTP mode config
 	if clientID == "" {
@@ -170,28 +197,28 @@ func runHTTP(sdkConfig *webexsdk.Config, include, exclude string, minimal, reado
 	if redirectURI == "" {
 		return fmt.Errorf("WEBEX_REDIRECT_URI or --redirect-uri is required in http mode")
 	}
-	if serverURL == "" {
-		// Default to http://host:port
-		scheme := "http"
-		if tlsCert != "" {
-			scheme = "https"
-		}
-		serverURL = fmt.Sprintf("%s://%s:%d", scheme, host, port)
+	if baseURL == "" {
+		return fmt.Errorf("WEBEX_BASE_URL or --base-url is required in http mode (example: http://localhost:%d)", port)
+	}
+	baseURL, err := normalizeHTTPBaseURL(baseURL)
+	if err != nil {
+		return fmt.Errorf("invalid WEBEX_BASE_URL or --base-url: %w", err)
 	}
 
-	log.Printf("Starting Webex MCP Server v%s in HTTP mode (server_url=%s)", version, serverURL)
+	log.Printf("Starting Webex MCP Server v%s in HTTP mode (base_url=%s)", version, baseURL)
 
 	return startHTTPServer(&HTTPServerConfig{
 		Host:    host,
 		Port:    port,
 		TLSCert: tlsCert,
 		TLSKey:  tlsKey,
+		BaseURL: baseURL,
 		OAuthConfig: &auth.OAuthConfig{
 			ClientID:     clientID,
 			ClientSecret: clientSecret,
 			Scopes:       oauthScopes,
 			RedirectURI:  redirectURI,
-			ServerURL:    serverURL,
+			ServerURL:    baseURL,
 		},
 		WebexSDKConfig: sdkConfig,
 		StoreConfig: auth.StoreConfig{

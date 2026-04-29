@@ -46,7 +46,7 @@ Configuration is loaded via environment variables and/or CLI flags. CLI flags ta
 | Env Variable | CLI Flag | Required | Default | Description |
 |---|---|---|---|---|
 | `WEBEX_MODE` | `--mode` | No | `stdio` | Server mode: `stdio` or `http` |
-| `WEBEX_BASE_URL` | `--base-url` | No | `https://webexapis.com/v1` | Webex API base URL |
+| `WEBEX_API_BASE_URL` | `--webex-api-base-url` | No | `https://webexapis.com/v1` | Webex API base URL |
 | `WEBEX_TIMEOUT` | `--timeout` | No | `30s` | HTTP request timeout |
 | `WEBEX_INCLUDE_TOOLS` | `--include` | No | - | Comma-separated list of tools to include |
 | `WEBEX_EXCLUDE_TOOLS` | `--exclude` | No | - | Comma-separated list of tools to exclude |
@@ -66,7 +66,7 @@ Configuration is loaded via environment variables and/or CLI flags. CLI flags ta
 | `WEBEX_CLIENT_ID` | `--client-id` | Yes (http) | - | Webex Integration Client ID |
 | `WEBEX_CLIENT_SECRET` | `--client-secret` | Yes (http) | - | Webex Integration Client Secret |
 | `WEBEX_REDIRECT_URI` | `--redirect-uri` | Yes (http) | - | OAuth redirect URI registered with Webex |
-| `WEBEX_SERVER_URL` | `--server-url` | No | `http://host:port` | External base URL of this server |
+| `WEBEX_BASE_URL` | `--base-url` | Yes (http) | - | External base URL of this MCP server, used for OAuth metadata and signed upload URLs. Localhost is supported, e.g. `http://localhost:8560` or `localhost:8560` |
 | `WEBEX_OAUTH_SCOPES` | `--oauth-scopes` | No | `spark:all` | Webex OAuth scopes (space-separated) |
 | `WEBEX_HOST` | `--host` | No | `localhost` | HTTP server bind host |
 | `WEBEX_PORT` | `--port` | No | `8080` | HTTP server port |
@@ -145,7 +145,7 @@ export WEBEX_ACCESS_TOKEN="your-token-here"
 export WEBEX_CLIENT_ID="your-client-id"
 export WEBEX_CLIENT_SECRET="your-client-secret"
 export WEBEX_REDIRECT_URI="http://localhost:8080/callback"
-./webex-go-mcp --mode http --port 8080
+./webex-go-mcp --mode http --port 8080 --base-url http://localhost:8080
 ```
 
 #### Setting Up a Webex Integration (HTTP Mode)
