@@ -1,12 +1,15 @@
 package tools
 
 import (
+	"context"
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	webex "github.com/WebexCommunity/webex-go-sdk/v2"
+	"github.com/WebexCommunity/webex-go-sdk/v2/messages"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -77,6 +80,55 @@ func TestRegisterMessageToolsHTTPAttachmentSchema(t *testing.T) {
 	}
 	if !strings.Contains(adaptiveCard.Description, "Do not use the files URL") {
 		t.Fatalf("HTTP adaptive card description should warn against Webex content URLs: %s", adaptiveCard.Description)
+	}
+}
+
+func TestRegisterMessageToolsHybridLoggedInUserSendTools(t *testing.T) {
+	uploads, err := NewUploadManager("http://localhost:8560", t.TempDir(), 1024)
+	if err != nil {
+		t.Fatalf("NewUploadManager() error = %v", err)
+	}
+	defer uploads.Close()
+
+	dummyResolver := func(context.Context) (*webex.WebexClient, error) {
+		return nil, nil
+	}
+
+	registrar := &recordingRegistrar{}
+	RegisterMessageTools(registrar, nil, MessageToolOptions{
+		AllowLocalFilePath: false,
+		Uploads:            uploads,
+		SendResolver:       dummyResolver,
+		LoggedInUserSender: dummyResolver,
+	})
+
+	for _, name := range []string{
+		"webex_messages_create_as_logged_in_user",
+		"webex_messages_send_attachment_as_logged_in_user",
+		"webex_messages_send_adaptive_card_as_logged_in_user",
+	} {
+		tool, ok := registrar.tools[name]
+		if !ok {
+			t.Fatalf("hybrid tool %q was not registered", name)
+		}
+		if !strings.Contains(tool.Description, "Hybrid mode only") {
+			t.Fatalf("hybrid tool %q description = %q, want hybrid guidance", name, tool.Description)
+		}
+	}
+}
+
+func TestMessageTargetsSelf(t *testing.T) {
+	if !messageTargetsSelf(&messages.Message{ToPersonEmail: "ALICE@EXAMPLE.COM"}, "person-1", []string{"alice@example.com"}) {
+		t.Fatal("messageTargetsSelf() = false, want true for matching email")
+	}
+	if !messageTargetsSelf(&messages.Message{ToPersonID: "person-1"}, "person-1", []string{"alice@example.com"}) {
+		t.Fatal("messageTargetsSelf() = false, want true for matching person ID")
+	}
+	if messageTargetsSelf(&messages.Message{ToPersonEmail: "bob@example.com"}, "person-1", []string{"alice@example.com"}) {
+		t.Fatal("messageTargetsSelf() = true, want false for different email")
+	}
+	if messageTargetsSelf(&messages.Message{RoomID: "room-1"}, "person-1", []string{"alice@example.com"}) {
+		t.Fatal("messageTargetsSelf() = true, want false for roomId sends")
 	}
 }
 

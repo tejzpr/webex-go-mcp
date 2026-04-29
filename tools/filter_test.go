@@ -182,3 +182,26 @@ func TestResolvePresets_SharedEnvMinimalTakesPriority(t *testing.T) {
 		t.Errorf("ResolvePresets(true, true, true, \"\") = %q, want %q", got, expected)
 	}
 }
+
+func TestPresetsIncludeHybridLoggedInUserSendTools(t *testing.T) {
+	for _, preset := range [][]string{PresetMinimal, PresetSharedEnvMinimal} {
+		for _, tool := range []string{
+			"webex_messages_create_as_logged_in_user",
+			"webex_messages_send_attachment_as_logged_in_user",
+			"webex_messages_send_adaptive_card_as_logged_in_user",
+		} {
+			if !stringSliceContains(preset, tool) {
+				t.Fatalf("preset %v does not include %s", preset, tool)
+			}
+		}
+	}
+}
+
+func stringSliceContains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}

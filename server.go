@@ -89,6 +89,7 @@ type HTTPServerConfig struct {
 	AuthAPIKey       string
 	OAuthConfig      *auth.OAuthConfig
 	StaticResolver   auth.ClientResolver
+	BotSendResolver  auth.ClientResolver
 	WebexSDKConfig   *webexsdk.Config
 	StoreConfig      auth.StoreConfig
 	Include          string
@@ -210,8 +211,8 @@ func uploadBaseURL(cfg *HTTPServerConfig) string {
 }
 
 // startHTTPServer starts the MCP server in HTTP mode.
-// It uses OAuth 2.1 when OAuthConfig is set, or an unauthenticated MCP endpoint
-// backed by a static server-side Webex token when StaticResolver is set.
+// It uses OAuth 2.1 when OAuthConfig is set, a static server-side Webex token
+// when StaticResolver is set, or hybrid OAuth+bot sends when BotSendResolver is set.
 func startHTTPServer(cfg *HTTPServerConfig) error {
 	resolver := cfg.StaticResolver
 	var store auth.Store
@@ -240,6 +241,9 @@ func startHTTPServer(cfg *HTTPServerConfig) error {
 		discoveryHandler = auth.NewDiscoveryHandler(cfg.OAuthConfig)
 		authMiddleware = auth.NewAuthMiddleware(store, clientCache, oauthHandler, cfg.OAuthConfig.ServerURL)
 		resolver = auth.NewHTTPClientResolver()
+		if cfg.BotSendResolver != nil {
+			log.Printf("HTTP hybrid mode enabled: OAuth-authenticated tools use the logged-in user; default message send tools use WEBEX_ACCESS_TOKEN; *_as_logged_in_user tools use the OAuth user")
+		}
 	} else {
 		log.Printf("Using static WEBEX_ACCESS_TOKEN in HTTP mode; MCP endpoint authentication is disabled")
 	}
@@ -252,10 +256,15 @@ func startHTTPServer(cfg *HTTPServerConfig) error {
 
 	// Register tools with the resolver.
 	// MercuryManager needs the MCPServer ref, so we pass nil first, then register streaming tools after.
-	mcpServer := registerTools(resolver, cfg.Include, cfg.Exclude, cfg.Minimal, cfg.ReadonlyMinimal, cfg.SharedEnvMinimal, nil, tools.MessageToolOptions{
+	messageOptions := tools.MessageToolOptions{
 		AllowLocalFilePath: false,
 		Uploads:            uploadManager,
-	})
+	}
+	if cfg.BotSendResolver != nil {
+		messageOptions.SendResolver = cfg.BotSendResolver
+		messageOptions.LoggedInUserSender = resolver
+	}
+	mcpServer := registerTools(resolver, cfg.Include, cfg.Exclude, cfg.Minimal, cfg.ReadonlyMinimal, cfg.SharedEnvMinimal, nil, messageOptions)
 
 	// Create MercuryManager for streaming tools (needs MCPServer for notifications)
 	mercuryMgr := streaming.NewMercuryManager(mcpServer)
@@ -323,9 +332,13 @@ func startHTTPServer(cfg *HTTPServerConfig) error {
 	handler := requestLoggingMiddleware(corsMiddleware(corsOrigins, mux))
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
+	modeLabel := "HTTP mode"
+	if cfg.BotSendResolver != nil {
+		modeLabel = "HTTP HYBRID mode"
+	}
 
 	if cfg.TLSCert != "" && cfg.TLSKey != "" {
-		log.Printf("Starting Webex MCP Server v%s in HTTP mode (https://%s)", version, addr)
+		log.Printf("Starting Webex MCP Server v%s in %s (https://%s)", version, modeLabel, addr)
 		tlsServer := &http.Server{
 			Addr:    addr,
 			Handler: handler,
@@ -336,6 +349,6 @@ func startHTTPServer(cfg *HTTPServerConfig) error {
 		return tlsServer.ListenAndServeTLS(cfg.TLSCert, cfg.TLSKey)
 	}
 
-	log.Printf("Starting Webex MCP Server v%s in HTTP mode (http://%s)", version, addr)
+	log.Printf("Starting Webex MCP Server v%s in %s (http://%s)", version, modeLabel, addr)
 	return http.ListenAndServe(addr, handler)
 }

@@ -155,6 +155,7 @@ var (
 	// Excludes memberships and webhooks.
 	PresetMinimal = []string{
 		"webex_messages_list", "webex_messages_create", "webex_messages_send_attachment", "webex_messages_send_adaptive_card", "webex_messages_get", "webex_messages_delete",
+		"webex_messages_create_as_logged_in_user", "webex_messages_send_attachment_as_logged_in_user", "webex_messages_send_adaptive_card_as_logged_in_user",
 		"webex_uploads_request_url",
 		"webex_find_messages_like_in_room",
 		"webex_rooms_list", "webex_rooms_create", "webex_rooms_get", "webex_rooms_update", "webex_rooms_delete",
@@ -173,6 +174,7 @@ var (
 	PresetSharedEnvMinimal = []string{
 		"webex_people_get",
 		"webex_messages_create", "webex_messages_send_attachment", "webex_messages_send_adaptive_card",
+		"webex_messages_create_as_logged_in_user", "webex_messages_send_attachment_as_logged_in_user", "webex_messages_send_adaptive_card_as_logged_in_user",
 		"webex_uploads_request_url",
 	}
 

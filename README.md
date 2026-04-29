@@ -4,18 +4,18 @@ A Go-based [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) serv
 
 ## Features
 
-- **Two transport modes**: STDIO (single-user, access token) and HTTP (multi-user, OAuth 2.1)
+- **Two transport modes**: STDIO (single-user, access token) and HTTP (OAuth, static token, or hybrid bot/user mode)
 - **OAuth 2.1 Authorization Server**: In HTTP mode, acts as an MCP-compliant OAuth 2.1 authorization server, proxying Webex Integration OAuth (Authorization Code + PKCE)
 - **Dynamic Client Registration**: RFC 7591 support for MCP clients to register dynamically
 - **Opaque Bearer tokens**: Issues its own tokens to MCP clients; Webex tokens never exposed
 - **Transparent token refresh**: Automatically refreshes expired Webex tokens
 - **Multi-user support**: Each authenticated user gets their own Webex API context
 
-**44 MCP tools** across 9 Webex API resource categories:
+**MCP tools** across Webex API resource categories:
 
 | Category | Tools | Operations |
 |---|---|---|
-| **Messages** | 6 | List, create, send attachment, send adaptive card, get, delete messages |
+| **Messages** | 6 (+3 hybrid-only) | List, create, send attachment, send adaptive card, get, delete messages |
 | **Rooms** | 5 | List, create, get, update, delete rooms/spaces |
 | **Teams** | 4 | List, create, get, update teams |
 | **Memberships** | 4 | List, create, update, delete room memberships |
@@ -29,7 +29,7 @@ A Go-based [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) serv
 
 - Go 1.26 or later
 - **STDIO mode**: A [Webex access token](https://developer.webex.com/docs/getting-your-personal-access-token)
-- **HTTP mode**: A [Webex Integration](https://developer.webex.com/docs/integrations) (Client ID, Client Secret, Redirect URI)
+- **HTTP mode**: A [Webex Integration](https://developer.webex.com/docs/integrations) for OAuth, a Webex access token for static bot mode, or both for hybrid mode
 
 ## Build
 
@@ -64,9 +64,9 @@ Configuration is loaded via environment variables and/or CLI flags. CLI flags ta
 
 | Env Variable | CLI Flag | Required | Default | Description |
 |---|---|---|---|---|
-| `WEBEX_CLIENT_ID` | `--client-id` | Either (http) | - | Webex Integration Client ID. If client ID and secret are configured, OAuth mode is used and `WEBEX_ACCESS_TOKEN` is ignored |
+| `WEBEX_CLIENT_ID` | `--client-id` | Either (http) | - | Webex Integration Client ID. If client ID, secret, and access token are configured, HTTP hybrid mode is used |
 | `WEBEX_CLIENT_SECRET` | `--client-secret` | Either (http) | - | Webex Integration Client Secret |
-| `WEBEX_ACCESS_TOKEN` | `--access-token` | Either (http) | - | Static server-side Webex token for HTTP mode without MCP OAuth. Used only when client ID and secret are not configured |
+| `WEBEX_ACCESS_TOKEN` | `--access-token` | Either (http) | - | Static server-side Webex token. Without OAuth config, it powers all tools. With client ID and secret, it powers default message sends as the bot in hybrid mode |
 | `WEBEX_REDIRECT_URI` | `--redirect-uri` | Yes for OAuth | - | OAuth redirect URI registered with Webex |
 | `WEBEX_BASE_URL` | `--base-url` | Yes (http) | - | External base URL of this MCP server, used for OAuth metadata and signed upload URLs. Localhost is supported, e.g. `http://localhost:8560` or `localhost:8560` |
 | `WEBEX_AUTH_API_KEY` | `--auth-api-key` | No | - | Optional API key required on `/mcp` requests via `X-API-Key`. Applies on top of OAuth or static-token mode |
@@ -96,7 +96,7 @@ The `category:action` shorthand maps to the full tool name `webex_{category}_{ac
 | Category | Actions |
 |---|---|
 | `people` | `get` |
-| `messages` | `list`, `create`, `send_attachment`, `send_adaptive_card`, `get`, `delete` |
+| `messages` | `list`, `create`, `send_attachment`, `send_adaptive_card`, `get`, `delete`; hybrid-only: `create_as_logged_in_user`, `send_attachment_as_logged_in_user`, `send_adaptive_card_as_logged_in_user` |
 | `rooms` | `list`, `create`, `get`, `update`, `delete` |
 | `teams` | `list`, `create`, `get`, `update` |
 | `memberships` | `list`, `create`, `update`, `delete` |
@@ -110,8 +110,8 @@ The `category:action` shorthand maps to the full tool name `webex_{category}_{ac
 
 For convenience, preset flags are available that automatically add a curated set of tools to the `--include` list:
 
-- **`--minimal`** -- All operations for messages, rooms, teams, meetings, transcripts, and streaming (excludes memberships and webhooks). **30 tools.**
-- **`--shared-env-minimal`** -- Shared bot-safe surface: person lookup and outbound message/card/attachment tools only. No room/message history reads, broad lists, subscriptions, transcripts, meetings, memberships, webhooks, updates, or deletes. **5 tools.**
+- **`--minimal`** -- All operations for messages, rooms, teams, meetings, transcripts, and streaming (excludes memberships and webhooks). Includes the hybrid-only logged-in-user send tools when HTTP hybrid mode is enabled.
+- **`--shared-env-minimal`** -- Shared bot-safe surface: person lookup and outbound message/card/attachment tools only. No room/message history reads, broad lists, subscriptions, transcripts, meetings, memberships, webhooks, updates, or deletes. Includes the hybrid-only logged-in-user send tools when HTTP hybrid mode is enabled.
 - **`--readonly-minimal`** -- Only read/list/get operations for messages, rooms, teams, meetings, transcripts, and streaming. No create, update, or delete. **17 tools.**
 
 These flags **merge** with `--include` -- they don't override it. For example, `--minimal --include "webhooks:list"` registers the minimal set plus `webhooks:list`. If multiple presets are set, `--shared-env-minimal` takes priority because it is the safest.
@@ -164,6 +164,18 @@ Static token mode:
 export WEBEX_ACCESS_TOKEN="your-token-here"
 ./webex-go-mcp --mode http --port 8080 --base-url http://localhost:8080
 ```
+
+Hybrid mode:
+
+```bash
+export WEBEX_CLIENT_ID="your-client-id"
+export WEBEX_CLIENT_SECRET="your-client-secret"
+export WEBEX_REDIRECT_URI="http://localhost:8080/callback"
+export WEBEX_ACCESS_TOKEN="your-bot-token-here"
+./webex-go-mcp --mode http --port 8080 --base-url http://localhost:8080
+```
+
+In hybrid mode, users still authenticate with OAuth. Read/user-context tools use the logged-in user's token. Default message send tools use `WEBEX_ACCESS_TOKEN`, so messages are sent as the bot. Hybrid-only `*_as_logged_in_user` tools send as the OAuth user instead and refuse direct sends to that same logged-in user.
 
 Optional MCP API-key guard:
 
@@ -352,6 +364,9 @@ Add to your Cursor MCP configuration (`.cursor/mcp.json` in your project or `~/.
 - **`webex_messages_create`** -- Send a text message. To DM someone, just pass `toPersonEmail` -- no room lookup needed. For group spaces, use `roomId`.
 - **`webex_messages_send_attachment`** -- Send a message with a file attachment. In HTTP mode, use `webex_uploads_request_url` + `uploadId` for local client files.
 - **`webex_messages_send_adaptive_card`** -- Send an Adaptive Card to a room or person. In HTTP mode, card image URLs can use `mcp-upload://<uploadId>` after `webex_uploads_request_url`; do not use Webex attachment `files` URLs as card images.
+- **`webex_messages_create_as_logged_in_user`** -- Hybrid mode only. Send text as the logged-in OAuth user instead of the bot.
+- **`webex_messages_send_attachment_as_logged_in_user`** -- Hybrid mode only. Send an attachment as the logged-in OAuth user instead of the bot.
+- **`webex_messages_send_adaptive_card_as_logged_in_user`** -- Hybrid mode only. Send an Adaptive Card as the logged-in OAuth user instead of the bot.
 - **`webex_messages_get`** -- Get a message by ID. Enriched with sender profile, room info, and file content (text files inline).
 - **`webex_messages_delete`** -- Delete a message by ID
 

@@ -30,7 +30,7 @@ func main() {
 
 	// Define flags
 	rootCmd.Flags().String("mode", "stdio", "Server mode: 'stdio' (default) or 'http' (env: WEBEX_MODE)")
-	rootCmd.Flags().String("access-token", "", "Webex API access token (env: WEBEX_ACCESS_TOKEN). Required for stdio mode; optional for static-token http mode.")
+	rootCmd.Flags().String("access-token", "", "Webex API access token (env: WEBEX_ACCESS_TOKEN). Required for stdio mode; used for static-token http mode or bot sends in hybrid http mode.")
 	rootCmd.Flags().String("webex-api-base-url", "https://webexapis.com/v1", "Webex API base URL (env: WEBEX_API_BASE_URL)")
 	rootCmd.Flags().Duration("timeout", 30*time.Second, "HTTP request timeout (env: WEBEX_TIMEOUT)")
 	rootCmd.Flags().String("include", "", "Comma-separated list of tools to include (category:action format, e.g. messages:list,meetings:create). Only these tools will be registered. (env: WEBEX_INCLUDE_TOOLS)")
@@ -206,6 +206,7 @@ func runHTTP(sdkConfig *webexsdk.Config, include, exclude string, minimal, reado
 
 	var oauthConfig *auth.OAuthConfig
 	var staticResolver auth.ClientResolver
+	var botSendResolver auth.ClientResolver
 	if clientID != "" || clientSecret != "" {
 		if clientID == "" {
 			return fmt.Errorf("WEBEX_CLIENT_ID or --client-id is required when using OAuth in http mode")
@@ -216,15 +217,19 @@ func runHTTP(sdkConfig *webexsdk.Config, include, exclude string, minimal, reado
 		if redirectURI == "" {
 			return fmt.Errorf("WEBEX_REDIRECT_URI or --redirect-uri is required when using OAuth in http mode")
 		}
-		if accessToken != "" {
-			log.Printf("WEBEX_ACCESS_TOKEN is set but ignored because WEBEX_CLIENT_ID and WEBEX_CLIENT_SECRET are configured")
-		}
 		oauthConfig = &auth.OAuthConfig{
 			ClientID:     clientID,
 			ClientSecret: clientSecret,
 			Scopes:       oauthScopes,
 			RedirectURI:  redirectURI,
 			ServerURL:    baseURL,
+		}
+		if accessToken != "" {
+			botClient, err := webex.NewClient(accessToken, sdkConfig)
+			if err != nil {
+				return fmt.Errorf("failed to create bot Webex client from WEBEX_ACCESS_TOKEN for hybrid HTTP mode: %w", err)
+			}
+			botSendResolver = auth.NewStaticClientResolver(botClient)
 		}
 	} else {
 		if accessToken == "" {
@@ -237,18 +242,23 @@ func runHTTP(sdkConfig *webexsdk.Config, include, exclude string, minimal, reado
 		staticResolver = auth.NewStaticClientResolver(webexClient)
 	}
 
-	log.Printf("Starting Webex MCP Server v%s in HTTP mode (base_url=%s)", version, baseURL)
+	if botSendResolver != nil {
+		log.Printf("Starting Webex MCP Server v%s in HTTP HYBRID mode (base_url=%s): OAuth user authentication enabled; default message sends use WEBEX_ACCESS_TOKEN bot identity", version, baseURL)
+	} else {
+		log.Printf("Starting Webex MCP Server v%s in HTTP mode (base_url=%s)", version, baseURL)
+	}
 
 	return startHTTPServer(&HTTPServerConfig{
-		Host:           host,
-		Port:           port,
-		TLSCert:        tlsCert,
-		TLSKey:         tlsKey,
-		BaseURL:        baseURL,
-		AuthAPIKey:     authAPIKey,
-		OAuthConfig:    oauthConfig,
-		StaticResolver: staticResolver,
-		WebexSDKConfig: sdkConfig,
+		Host:            host,
+		Port:            port,
+		TLSCert:         tlsCert,
+		TLSKey:          tlsKey,
+		BaseURL:         baseURL,
+		AuthAPIKey:      authAPIKey,
+		OAuthConfig:     oauthConfig,
+		StaticResolver:  staticResolver,
+		BotSendResolver: botSendResolver,
+		WebexSDKConfig:  sdkConfig,
 		StoreConfig: auth.StoreConfig{
 			Type: storeType,
 			DSN:  storeDSN,

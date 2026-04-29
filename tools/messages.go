@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	webex "github.com/WebexCommunity/webex-go-sdk/v2"
 	"github.com/WebexCommunity/webex-go-sdk/v2/messages"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/tejzpr/webex-go-mcp/auth"
@@ -20,6 +21,8 @@ import (
 type MessageToolOptions struct {
 	AllowLocalFilePath bool
 	Uploads            *UploadManager
+	SendResolver       auth.ClientResolver
+	LoggedInUserSender auth.ClientResolver
 }
 
 const cardUploadURLPrefix = "mcp-upload://"
@@ -168,12 +171,56 @@ func adaptiveCardToolDescription(opts MessageToolOptions) string {
 		"IMPORTANT: Always confirm with the user before sending."
 }
 
+func createMessageToolDescription(loggedInUser bool) string {
+	description := "Send a text message to a person or room in Webex.\n" +
+		"\n" +
+		"WHEN THE USER SAYS 'send a message to <email>' or 'message <name>@<domain>' or 'DM <email>':\n" +
+		"→ Use toPersonEmail with their email address. That's it. ONE call. Do NOT look up rooms, people, or IDs first.\n" +
+		"\n" +
+		"WHEN THE USER SAYS 'send a message to <room name>' or 'post in <space name>':\n" +
+		"→ Use webex_rooms_list to find the roomId, then use roomId here.\n" +
+		"\n" +
+		"QUICK REFERENCE:\n" +
+		"- Have an email? → toPersonEmail (direct DM, no lookup needed)\n" +
+		"- Have a room/space name? → find roomId via webex_rooms_list first, then roomId\n" +
+		"- Have a personId from a previous call? → toPersonId\n" +
+		"- Have a roomId from a previous call? → roomId\n" +
+		"\n" +
+		"To send files/attachments, use webex_messages_send_attachment instead.\n" +
+		"\n" +
+		"IMPORTANT: Always confirm with the user before sending, unless they explicitly said not to."
+
+	if !loggedInUser {
+		return description
+	}
+
+	return "Hybrid mode only. Send using the logged-in user's OAuth token instead of the bot access token.\n" +
+		"If the destination is the logged-in user, use webex_messages_create instead; in hybrid mode the default tool sends from the bot.\n" +
+		"\n" +
+		description
+}
+
+func loggedInUserSendDescription(defaultToolName, baseDescription string) string {
+	return "Hybrid mode only. Send using the logged-in user's OAuth token instead of the bot access token.\n" +
+		"If the destination is the logged-in user, use " + defaultToolName + " instead; in hybrid mode the default tool sends from the bot.\n" +
+		"\n" +
+		baseDescription
+}
+
+func resolveDefaultSendResolver(defaultResolver auth.ClientResolver, opts MessageToolOptions) auth.ClientResolver {
+	if opts.SendResolver != nil {
+		return opts.SendResolver
+	}
+	return defaultResolver
+}
+
 // RegisterMessageTools registers all message-related MCP tools.
 func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver, options ...MessageToolOptions) {
 	messageOptions := defaultMessageToolOptions()
 	if len(options) > 0 {
 		messageOptions = options[0]
 	}
+	sendResolver := resolveDefaultSendResolver(resolver, messageOptions)
 
 	// webex_messages_list
 	s.AddTool(
@@ -310,62 +357,10 @@ func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver, options
 		},
 	)
 
-	// webex_messages_create
-	s.AddTool(
-		mcp.NewTool("webex_messages_create",
-			mcp.WithDescription("Send a text message to a person or room in Webex.\n"+
-				"\n"+
-				"WHEN THE USER SAYS 'send a message to <email>' or 'message <name>@<domain>' or 'DM <email>':\n"+
-				"→ Use toPersonEmail with their email address. That's it. ONE call. Do NOT look up rooms, people, or IDs first.\n"+
-				"\n"+
-				"WHEN THE USER SAYS 'send a message to <room name>' or 'post in <space name>':\n"+
-				"→ Use webex_rooms_list to find the roomId, then use roomId here.\n"+
-				"\n"+
-				"QUICK REFERENCE:\n"+
-				"- Have an email? → toPersonEmail (direct DM, no lookup needed)\n"+
-				"- Have a room/space name? → find roomId via webex_rooms_list first, then roomId\n"+
-				"- Have a personId from a previous call? → toPersonId\n"+
-				"- Have a roomId from a previous call? → roomId\n"+
-				"\n"+
-				"To send files/attachments, use webex_messages_send_attachment instead.\n"+
-				"\n"+
-				"IMPORTANT: Always confirm with the user before sending, unless they explicitly said not to."),
-			mcp.WithString("roomId", mcp.Description("Room/space ID. Use ONLY when sending to a group space or when you already have a roomId. Do NOT look up a room just to DM someone -- use toPersonEmail instead.")),
-			mcp.WithString("toPersonId", mcp.Description("Person ID for a direct 1:1 message. Use only if you already have it from a previous API response.")),
-			mcp.WithString("toPersonEmail", mcp.Description("Email address for a direct 1:1 message (e.g. 'alice@example.com'). USE THIS when the user provides an email. No room lookup or person lookup needed -- Webex handles everything.")),
-			mcp.WithString("text", mcp.Description("Plain text message content.")),
-			mcp.WithString("markdown", mcp.Description("Rich text using Webex markdown (bold, italic, links, code blocks, lists). Use this when formatting is desired.")),
-		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			client, err := resolver(ctx)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
-			}
-
-			msg := &messages.Message{
-				RoomID:        req.GetString("roomId", ""),
-				ToPersonID:    req.GetString("toPersonId", ""),
-				ToPersonEmail: req.GetString("toPersonEmail", ""),
-				Text:          req.GetString("text", ""),
-				Markdown:      req.GetString("markdown", ""),
-			}
-
-			if msg.RoomID == "" && msg.ToPersonID == "" && msg.ToPersonEmail == "" {
-				return mcp.NewToolResultError("One of roomId, toPersonId, or toPersonEmail is required"), nil
-			}
-			if msg.Text == "" && msg.Markdown == "" {
-				return mcp.NewToolResultError("Either text or markdown content is required"), nil
-			}
-
-			result, err := client.Messages().Create(msg)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("Failed to create message: %v", err)), nil
-			}
-
-			data, _ := json.MarshalIndent(result, "", "  ")
-			return mcp.NewToolResultText(string(data)), nil
-		},
-	)
+	registerMessageCreateTool(s, "webex_messages_create", sendResolver, false)
+	if messageOptions.LoggedInUserSender != nil {
+		registerMessageCreateTool(s, "webex_messages_create_as_logged_in_user", messageOptions.LoggedInUserSender, true)
+	}
 
 	if messageOptions.Uploads != nil {
 		// webex_uploads_request_url
@@ -392,192 +387,15 @@ func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver, options
 		)
 	}
 
-	// webex_messages_send_attachment
-	attachmentOpts := []mcp.ToolOption{
-		mcp.WithDescription(attachmentToolDescription(messageOptions)),
-		mcp.WithString("roomId", mcp.Description("Room/space ID. Use when sending to a group space or when you already have a roomId.")),
-		mcp.WithString("toPersonId", mcp.Description("Person ID for a direct 1:1 message. Use only if you already have it.")),
-		mcp.WithString("toPersonEmail", mcp.Description("Email address for a direct 1:1 message (e.g. 'alice@example.com'). No lookup needed.")),
+	registerMessageAttachmentTool(s, "webex_messages_send_attachment", sendResolver, messageOptions, false)
+	if messageOptions.LoggedInUserSender != nil {
+		registerMessageAttachmentTool(s, "webex_messages_send_attachment_as_logged_in_user", messageOptions.LoggedInUserSender, messageOptions, true)
 	}
-	if messageOptions.AllowLocalFilePath {
-		attachmentOpts = append(attachmentOpts,
-			mcp.WithString("localFilePath", mcp.Description("BEST option. Absolute path to a file on the local filesystem (e.g. '/tmp/report.pdf', '/Users/me/chart.png'). The MCP server reads the file and uploads it directly to Webex. Use this when the file exists on disk — it avoids base64 encoding and LLM token limits. Provide ONLY this, OR fileBase64+fileName, OR fileUrl.")),
-		)
+
+	registerMessageAdaptiveCardTool(s, "webex_messages_send_adaptive_card", sendResolver, messageOptions, false)
+	if messageOptions.LoggedInUserSender != nil {
+		registerMessageAdaptiveCardTool(s, "webex_messages_send_adaptive_card_as_logged_in_user", messageOptions.LoggedInUserSender, messageOptions, true)
 	}
-	if messageOptions.Uploads != nil {
-		attachmentOpts = append(attachmentOpts,
-			mcp.WithString("uploadId", mcp.Description("BEST option in HTTP mode. First call webex_uploads_request_url, upload the file bytes to uploadUrl with HTTP PUT, then pass the returned uploadId here. Provide ONLY this, OR fileBase64+fileName, OR fileUrl.")),
-		)
-	}
-	attachmentOpts = append(attachmentOpts,
-		mcp.WithString("fileBase64", mcp.Description(attachmentBase64Description(messageOptions))),
-		mcp.WithString("fileName", mcp.Description(attachmentFileNameDescription(messageOptions))),
-		mcp.WithString("fileUrl", mcp.Description(attachmentFileURLDescription(messageOptions))),
-		mcp.WithString("text", mcp.Description("Optional plain text message to include with the file.")),
-		mcp.WithString("markdown", mcp.Description("Optional rich text message (Webex markdown) to include with the file.")),
-	)
-	s.AddTool(
-		mcp.NewTool("webex_messages_send_attachment", attachmentOpts...),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			client, err := resolver(ctx)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
-			}
-
-			msg := &messages.Message{
-				RoomID:        req.GetString("roomId", ""),
-				ToPersonID:    req.GetString("toPersonId", ""),
-				ToPersonEmail: req.GetString("toPersonEmail", ""),
-				Text:          req.GetString("text", ""),
-				Markdown:      req.GetString("markdown", ""),
-			}
-
-			if msg.RoomID == "" && msg.ToPersonID == "" && msg.ToPersonEmail == "" {
-				return mcp.NewToolResultError("One of roomId, toPersonId, or toPersonEmail is required"), nil
-			}
-
-			localFilePath := req.GetString("localFilePath", "")
-			uploadID := req.GetString("uploadId", "")
-			fileBase64 := req.GetString("fileBase64", "")
-			fileName := req.GetString("fileName", "")
-			fileURL := req.GetString("fileUrl", "")
-
-			if localFilePath != "" && !messageOptions.AllowLocalFilePath {
-				return mcp.NewToolResultError("'localFilePath' is only supported in STDIO mode. In HTTP mode, use webex_uploads_request_url and pass the returned 'uploadId'."), nil
-			}
-			if uploadID != "" && messageOptions.Uploads == nil {
-				return mcp.NewToolResultError("'uploadId' is only supported in HTTP mode. In STDIO mode, use 'localFilePath' for files that exist on disk."), nil
-			}
-
-			// Count how many file source approaches were provided
-			sourceCount := 0
-			if localFilePath != "" {
-				sourceCount++
-			}
-			if uploadID != "" {
-				sourceCount++
-			}
-			if fileBase64 != "" {
-				sourceCount++
-			}
-			if fileURL != "" {
-				sourceCount++
-			}
-
-			if sourceCount == 0 {
-				return mcp.NewToolResultError(attachmentMissingSourceMessage(messageOptions)), nil
-			}
-			if sourceCount > 1 {
-				return mcp.NewToolResultError(attachmentMultipleSourcesMessage(messageOptions)), nil
-			}
-
-			var result *messages.Message
-
-			if localFilePath != "" {
-				// Local file upload: read from disk and send via multipart
-				fileBytes, readErr := os.ReadFile(localFilePath)
-				if readErr != nil {
-					return mcp.NewToolResultError(fmt.Sprintf("Failed to read local file '%s': %v", localFilePath, readErr)), nil
-				}
-				if fileName == "" {
-					fileName = filepath.Base(localFilePath)
-				}
-				result, err = client.Messages().CreateWithAttachment(msg, &messages.FileUpload{
-					FileName:  fileName,
-					FileBytes: fileBytes,
-				})
-			} else if uploadID != "" {
-				upload, consumeErr := messageOptions.Uploads.ConsumeUpload(uploadID)
-				if consumeErr != nil {
-					return mcp.NewToolResultError(fmt.Sprintf("Failed to use uploaded file: %v", consumeErr)), nil
-				}
-				defer os.Remove(upload.Path)
-
-				fileBytes, readErr := os.ReadFile(upload.Path)
-				if readErr != nil {
-					return mcp.NewToolResultError(fmt.Sprintf("Failed to read uploaded file for uploadId '%s': %v", uploadID, readErr)), nil
-				}
-				if fileName == "" {
-					fileName = upload.FileName
-				}
-				result, err = client.Messages().CreateWithAttachment(msg, &messages.FileUpload{
-					FileName:  fileName,
-					FileBytes: fileBytes,
-				})
-			} else if fileBase64 != "" {
-				// Base64 upload via multipart form
-				if fileName == "" {
-					return mcp.NewToolResultError("'fileName' is required when using 'fileBase64' (e.g. 'report.pdf')"), nil
-				}
-				result, err = client.Messages().CreateWithBase64File(msg, fileName, fileBase64)
-			} else {
-				// URL-based attachment
-				msg.Files = []string{fileURL}
-				result, err = client.Messages().Create(msg)
-			}
-
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("Failed to send attachment: %v", err)), nil
-			}
-
-			data, _ := json.MarshalIndent(result, "", "  ")
-			return mcp.NewToolResultText(string(data)), nil
-		},
-	)
-
-	// webex_messages_send_adaptive_card
-	s.AddTool(
-		mcp.NewTool("webex_messages_send_adaptive_card",
-			mcp.WithDescription(adaptiveCardToolDescription(messageOptions)),
-			mcp.WithString("roomId", mcp.Description("Room/space ID. Use when sending to a group space or when you already have a roomId.")),
-			mcp.WithString("toPersonId", mcp.Description("Person ID for a direct 1:1 message. Use only if you already have it.")),
-			mcp.WithString("toPersonEmail", mcp.Description("Email address for a direct 1:1 message (e.g. 'alice@example.com'). No lookup needed.")),
-			mcp.WithString("cardJson", mcp.Required(), mcp.Description("The Adaptive Card body as a JSON string. Must be a valid Adaptive Card object with at least {\"type\": \"AdaptiveCard\", \"version\": \"1.3\", \"body\": [...]}. See https://adaptivecards.io/explorer/ for the full schema.")),
-			mcp.WithString("fallbackText", mcp.Description("Plain text fallback displayed on clients that cannot render Adaptive Cards. If omitted, defaults to 'Adaptive Card'.")),
-		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			client, err := resolver(ctx)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
-			}
-
-			msg := &messages.Message{
-				RoomID:        req.GetString("roomId", ""),
-				ToPersonID:    req.GetString("toPersonId", ""),
-				ToPersonEmail: req.GetString("toPersonEmail", ""),
-			}
-
-			if msg.RoomID == "" && msg.ToPersonID == "" && msg.ToPersonEmail == "" {
-				return mcp.NewToolResultError("One of roomId, toPersonId, or toPersonEmail is required"), nil
-			}
-
-			cardJSON, err := req.RequireString("cardJson")
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-
-			var cardBody interface{}
-			if err := json.Unmarshal([]byte(cardJSON), &cardBody); err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("Invalid cardJson: %v", err)), nil
-			}
-
-			// Resolve local file paths in STDIO mode and mcp-upload placeholders in HTTP mode.
-			if err := resolveCardURLs(cardBody, messageOptions); err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("Failed to resolve URLs in card: %v", err)), nil
-			}
-
-			card := messages.NewAdaptiveCard(cardBody)
-			fallbackText := req.GetString("fallbackText", "")
-
-			result, err := client.Messages().CreateWithAdaptiveCard(msg, card, fallbackText)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("Failed to send adaptive card: %v", err)), nil
-			}
-
-			data, _ := json.MarshalIndent(result, "", "  ")
-			return mcp.NewToolResultText(string(data)), nil
-		},
-	)
 
 	// webex_messages_get
 	s.AddTool(
@@ -799,6 +617,297 @@ func RegisterMessageTools(s ToolRegistrar, resolver auth.ClientResolver, options
 			return mcp.NewToolResultText("Message deleted successfully"), nil
 		},
 	)
+}
+
+func registerMessageCreateTool(s ToolRegistrar, name string, resolver auth.ClientResolver, loggedInUser bool) {
+	s.AddTool(
+		mcp.NewTool(name,
+			mcp.WithDescription(createMessageToolDescription(loggedInUser)),
+			mcp.WithString("roomId", mcp.Description("Room/space ID. Use ONLY when sending to a group space or when you already have a roomId. Do NOT look up a room just to DM someone -- use toPersonEmail instead.")),
+			mcp.WithString("toPersonId", mcp.Description("Person ID for a direct 1:1 message. Use only if you already have it from a previous API response.")),
+			mcp.WithString("toPersonEmail", mcp.Description("Email address for a direct 1:1 message (e.g. 'alice@example.com'). USE THIS when the user provides an email. No room lookup or person lookup needed -- Webex handles everything.")),
+			mcp.WithString("text", mcp.Description("Plain text message content.")),
+			mcp.WithString("markdown", mcp.Description("Rich text using Webex markdown (bold, italic, links, code blocks, lists). Use this when formatting is desired.")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
+			msg := &messages.Message{
+				RoomID:        req.GetString("roomId", ""),
+				ToPersonID:    req.GetString("toPersonId", ""),
+				ToPersonEmail: req.GetString("toPersonEmail", ""),
+				Text:          req.GetString("text", ""),
+				Markdown:      req.GetString("markdown", ""),
+			}
+
+			if msg.RoomID == "" && msg.ToPersonID == "" && msg.ToPersonEmail == "" {
+				return mcp.NewToolResultError("One of roomId, toPersonId, or toPersonEmail is required"), nil
+			}
+			if msg.Text == "" && msg.Markdown == "" {
+				return mcp.NewToolResultError("Either text or markdown content is required"), nil
+			}
+			if loggedInUser {
+				if result := rejectLoggedInUserSelfSend(client, msg, "webex_messages_create"); result != nil {
+					return result, nil
+				}
+			}
+
+			result, err := client.Messages().Create(msg)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to create message: %v", err)), nil
+			}
+
+			data, _ := json.MarshalIndent(result, "", "  ")
+			return mcp.NewToolResultText(string(data)), nil
+		},
+	)
+}
+
+func registerMessageAttachmentTool(s ToolRegistrar, name string, resolver auth.ClientResolver, opts MessageToolOptions, loggedInUser bool) {
+	description := attachmentToolDescription(opts)
+	if loggedInUser {
+		description = loggedInUserSendDescription("webex_messages_send_attachment", description)
+	}
+
+	attachmentOpts := []mcp.ToolOption{
+		mcp.WithDescription(description),
+		mcp.WithString("roomId", mcp.Description("Room/space ID. Use when sending to a group space or when you already have a roomId.")),
+		mcp.WithString("toPersonId", mcp.Description("Person ID for a direct 1:1 message. Use only if you already have it.")),
+		mcp.WithString("toPersonEmail", mcp.Description("Email address for a direct 1:1 message (e.g. 'alice@example.com'). No lookup needed.")),
+	}
+	if opts.AllowLocalFilePath {
+		attachmentOpts = append(attachmentOpts,
+			mcp.WithString("localFilePath", mcp.Description("BEST option. Absolute path to a file on the local filesystem (e.g. '/tmp/report.pdf', '/Users/me/chart.png'). The MCP server reads the file and uploads it directly to Webex. Use this when the file exists on disk — it avoids base64 encoding and LLM token limits. Provide ONLY this, OR fileBase64+fileName, OR fileUrl.")),
+		)
+	}
+	if opts.Uploads != nil {
+		attachmentOpts = append(attachmentOpts,
+			mcp.WithString("uploadId", mcp.Description("BEST option in HTTP mode. First call webex_uploads_request_url, upload the file bytes to uploadUrl with HTTP PUT, then pass the returned uploadId here. Provide ONLY this, OR fileBase64+fileName, OR fileUrl.")),
+		)
+	}
+	attachmentOpts = append(attachmentOpts,
+		mcp.WithString("fileBase64", mcp.Description(attachmentBase64Description(opts))),
+		mcp.WithString("fileName", mcp.Description(attachmentFileNameDescription(opts))),
+		mcp.WithString("fileUrl", mcp.Description(attachmentFileURLDescription(opts))),
+		mcp.WithString("text", mcp.Description("Optional plain text message to include with the file.")),
+		mcp.WithString("markdown", mcp.Description("Optional rich text message (Webex markdown) to include with the file.")),
+	)
+
+	s.AddTool(
+		mcp.NewTool(name, attachmentOpts...),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
+			msg := &messages.Message{
+				RoomID:        req.GetString("roomId", ""),
+				ToPersonID:    req.GetString("toPersonId", ""),
+				ToPersonEmail: req.GetString("toPersonEmail", ""),
+				Text:          req.GetString("text", ""),
+				Markdown:      req.GetString("markdown", ""),
+			}
+
+			if msg.RoomID == "" && msg.ToPersonID == "" && msg.ToPersonEmail == "" {
+				return mcp.NewToolResultError("One of roomId, toPersonId, or toPersonEmail is required"), nil
+			}
+			if loggedInUser {
+				if result := rejectLoggedInUserSelfSend(client, msg, "webex_messages_send_attachment"); result != nil {
+					return result, nil
+				}
+			}
+
+			localFilePath := req.GetString("localFilePath", "")
+			uploadID := req.GetString("uploadId", "")
+			fileBase64 := req.GetString("fileBase64", "")
+			fileName := req.GetString("fileName", "")
+			fileURL := req.GetString("fileUrl", "")
+
+			if localFilePath != "" && !opts.AllowLocalFilePath {
+				return mcp.NewToolResultError("'localFilePath' is only supported in STDIO mode. In HTTP mode, use webex_uploads_request_url and pass the returned 'uploadId'."), nil
+			}
+			if uploadID != "" && opts.Uploads == nil {
+				return mcp.NewToolResultError("'uploadId' is only supported in HTTP mode. In STDIO mode, use 'localFilePath' for files that exist on disk."), nil
+			}
+
+			// Count how many file source approaches were provided.
+			sourceCount := 0
+			if localFilePath != "" {
+				sourceCount++
+			}
+			if uploadID != "" {
+				sourceCount++
+			}
+			if fileBase64 != "" {
+				sourceCount++
+			}
+			if fileURL != "" {
+				sourceCount++
+			}
+
+			if sourceCount == 0 {
+				return mcp.NewToolResultError(attachmentMissingSourceMessage(opts)), nil
+			}
+			if sourceCount > 1 {
+				return mcp.NewToolResultError(attachmentMultipleSourcesMessage(opts)), nil
+			}
+
+			var result *messages.Message
+
+			if localFilePath != "" {
+				// Local file upload: read from disk and send via multipart.
+				fileBytes, readErr := os.ReadFile(localFilePath)
+				if readErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to read local file '%s': %v", localFilePath, readErr)), nil
+				}
+				if fileName == "" {
+					fileName = filepath.Base(localFilePath)
+				}
+				result, err = client.Messages().CreateWithAttachment(msg, &messages.FileUpload{
+					FileName:  fileName,
+					FileBytes: fileBytes,
+				})
+			} else if uploadID != "" {
+				upload, consumeErr := opts.Uploads.ConsumeUpload(uploadID)
+				if consumeErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to use uploaded file: %v", consumeErr)), nil
+				}
+				defer os.Remove(upload.Path)
+
+				fileBytes, readErr := os.ReadFile(upload.Path)
+				if readErr != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("Failed to read uploaded file for uploadId '%s': %v", uploadID, readErr)), nil
+				}
+				if fileName == "" {
+					fileName = upload.FileName
+				}
+				result, err = client.Messages().CreateWithAttachment(msg, &messages.FileUpload{
+					FileName:  fileName,
+					FileBytes: fileBytes,
+				})
+			} else if fileBase64 != "" {
+				// Base64 upload via multipart form.
+				if fileName == "" {
+					return mcp.NewToolResultError("'fileName' is required when using 'fileBase64' (e.g. 'report.pdf')"), nil
+				}
+				result, err = client.Messages().CreateWithBase64File(msg, fileName, fileBase64)
+			} else {
+				// URL-based attachment.
+				msg.Files = []string{fileURL}
+				result, err = client.Messages().Create(msg)
+			}
+
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to send attachment: %v", err)), nil
+			}
+
+			data, _ := json.MarshalIndent(result, "", "  ")
+			return mcp.NewToolResultText(string(data)), nil
+		},
+	)
+}
+
+func registerMessageAdaptiveCardTool(s ToolRegistrar, name string, resolver auth.ClientResolver, opts MessageToolOptions, loggedInUser bool) {
+	description := adaptiveCardToolDescription(opts)
+	if loggedInUser {
+		description = loggedInUserSendDescription("webex_messages_send_adaptive_card", description)
+	}
+
+	s.AddTool(
+		mcp.NewTool(name,
+			mcp.WithDescription(description),
+			mcp.WithString("roomId", mcp.Description("Room/space ID. Use when sending to a group space or when you already have a roomId.")),
+			mcp.WithString("toPersonId", mcp.Description("Person ID for a direct 1:1 message. Use only if you already have it.")),
+			mcp.WithString("toPersonEmail", mcp.Description("Email address for a direct 1:1 message (e.g. 'alice@example.com'). No lookup needed.")),
+			mcp.WithString("cardJson", mcp.Required(), mcp.Description("The Adaptive Card body as a JSON string. Must be a valid Adaptive Card object with at least {\"type\": \"AdaptiveCard\", \"version\": \"1.3\", \"body\": [...]}. See https://adaptivecards.io/explorer/ for the full schema.")),
+			mcp.WithString("fallbackText", mcp.Description("Plain text fallback displayed on clients that cannot render Adaptive Cards. If omitted, defaults to 'Adaptive Card'.")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
+			msg := &messages.Message{
+				RoomID:        req.GetString("roomId", ""),
+				ToPersonID:    req.GetString("toPersonId", ""),
+				ToPersonEmail: req.GetString("toPersonEmail", ""),
+			}
+
+			if msg.RoomID == "" && msg.ToPersonID == "" && msg.ToPersonEmail == "" {
+				return mcp.NewToolResultError("One of roomId, toPersonId, or toPersonEmail is required"), nil
+			}
+			if loggedInUser {
+				if result := rejectLoggedInUserSelfSend(client, msg, "webex_messages_send_adaptive_card"); result != nil {
+					return result, nil
+				}
+			}
+
+			cardJSON, err := req.RequireString("cardJson")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			var cardBody interface{}
+			if err := json.Unmarshal([]byte(cardJSON), &cardBody); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Invalid cardJson: %v", err)), nil
+			}
+
+			// Resolve local file paths in STDIO mode and mcp-upload placeholders in HTTP mode.
+			if err := resolveCardURLs(cardBody, opts); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to resolve URLs in card: %v", err)), nil
+			}
+
+			card := messages.NewAdaptiveCard(cardBody)
+			fallbackText := req.GetString("fallbackText", "")
+
+			result, err := client.Messages().CreateWithAdaptiveCard(msg, card, fallbackText)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to send adaptive card: %v", err)), nil
+			}
+
+			data, _ := json.MarshalIndent(result, "", "  ")
+			return mcp.NewToolResultText(string(data)), nil
+		},
+	)
+}
+
+func rejectLoggedInUserSelfSend(client *webex.WebexClient, msg *messages.Message, defaultToolName string) *mcp.CallToolResult {
+	if msg.ToPersonID == "" && msg.ToPersonEmail == "" {
+		return nil
+	}
+
+	me, err := client.People().Get("me")
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to verify logged-in user identity before sending: %v", err))
+	}
+	if messageTargetsSelf(msg, me.ID, me.Emails) {
+		return mcp.NewToolResultError(fmt.Sprintf("Cannot send a message as the logged-in user to the same logged-in user. Use %s instead; in hybrid mode that sends from the bot access token.", defaultToolName))
+	}
+	return nil
+}
+
+func messageTargetsSelf(msg *messages.Message, personID string, emails []string) bool {
+	if msg == nil {
+		return false
+	}
+	if msg.ToPersonID != "" && personID != "" && strings.TrimSpace(msg.ToPersonID) == strings.TrimSpace(personID) {
+		return true
+	}
+	if msg.ToPersonEmail == "" {
+		return false
+	}
+	targetEmail := strings.TrimSpace(msg.ToPersonEmail)
+	for _, email := range emails {
+		if strings.EqualFold(targetEmail, strings.TrimSpace(email)) {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveCardURLs recursively walks a parsed Adaptive Card JSON tree and
