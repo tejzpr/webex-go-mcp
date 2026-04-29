@@ -121,9 +121,6 @@ func TestElicitingRegistrarAcceptRunsHandler(t *testing.T) {
 		result: &mcp.ElicitationResult{
 			ElicitationResponse: mcp.ElicitationResponse{
 				Action: mcp.ElicitationResponseActionAccept,
-				Content: map[string]any{
-					approvalFieldName: true,
-				},
 			},
 		},
 	}
@@ -150,6 +147,9 @@ func TestElicitingRegistrarAcceptRunsHandler(t *testing.T) {
 	}
 	if !strings.Contains(session.lastRequest.Params.Message, "toPersonEmail") {
 		t.Fatalf("approval message %q does not include argument preview", session.lastRequest.Params.Message)
+	}
+	if strings.Contains(session.lastRequest.Params.Message, "Approve this Webex action") {
+		t.Fatalf("approval message %q includes redundant confirmation field text", session.lastRequest.Params.Message)
 	}
 }
 
@@ -269,6 +269,29 @@ func TestElicitingRegistrarReadToolBypassesElicitation(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("read handler was not called")
+	}
+}
+
+func TestFormatArgumentPreviewOmitsLargePayloads(t *testing.T) {
+	cardJSON := `{"type":"AdaptiveCard","body":[{"type":"TextBlock","text":"do not include this body"}]}`
+	fileBase64 := strings.Repeat("a", 500)
+
+	preview := formatArgumentPreview(map[string]any{
+		"cardJson":   cardJSON,
+		"fileBase64": fileBase64,
+	})
+
+	if strings.Contains(preview, "do not include this body") {
+		t.Fatalf("preview leaked card body: %s", preview)
+	}
+	if strings.Contains(preview, fileBase64) {
+		t.Fatalf("preview leaked base64 payload: %s", preview)
+	}
+	if !strings.Contains(preview, "<adaptive card JSON omitted") {
+		t.Fatalf("preview did not mark card JSON omitted: %s", preview)
+	}
+	if !strings.Contains(preview, "<base64 omitted") {
+		t.Fatalf("preview did not mark base64 omitted: %s", preview)
 	}
 }
 

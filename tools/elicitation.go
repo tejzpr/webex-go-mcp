@@ -13,9 +13,8 @@ import (
 )
 
 const (
-	approvalFieldName = "confirm"
-	maxPreviewLength  = 280
-	maxPreviewArgs    = 12
+	maxPreviewLength = 280
+	maxPreviewArgs   = 12
 )
 
 var elicitationProtectedToolPrefixes = []string{
@@ -87,16 +86,10 @@ func (r *ElicitingRegistrar) requestApproval(ctx context.Context, toolName strin
 			Mode:    mcp.ElicitationModeForm,
 			Message: buildApprovalMessage(toolName, req),
 			RequestedSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					approvalFieldName: map[string]any{
-						"type":        "boolean",
-						"title":       "Approve",
-						"description": "Approve this Webex action.",
-						"default":     false,
-					},
-				},
-				"required": []string{approvalFieldName},
+				"type":                 "object",
+				"properties":           map[string]any{},
+				"required":             []string{},
+				"additionalProperties": false,
 			},
 		},
 	})
@@ -108,15 +101,6 @@ func (r *ElicitingRegistrar) requestApproval(ctx context.Context, toolName strin
 	}
 	if result.Action != mcp.ElicitationResponseActionAccept {
 		return mcp.NewToolResultError(fmt.Sprintf("User %s approval for %s. Action not performed.", result.Action, toolName))
-	}
-
-	content, ok := result.Content.(map[string]any)
-	if !ok {
-		return mcp.NewToolResultError(fmt.Sprintf("User approval response for %s did not include valid confirmation content. Action not performed.", toolName))
-	}
-	confirmed, ok := content[approvalFieldName].(bool)
-	if !ok || !confirmed {
-		return mcp.NewToolResultError(fmt.Sprintf("User did not confirm approval for %s. Action not performed.", toolName))
 	}
 
 	return nil
@@ -215,6 +199,12 @@ func previewValue(key string, value any) string {
 			return fmt.Sprintf("<base64 omitted, %d characters>", len(raw))
 		}
 		return "<base64 omitted>"
+	}
+	if strings.Contains(lowerKey, "cardjson") {
+		if raw, ok := value.(string); ok {
+			return fmt.Sprintf("<adaptive card JSON omitted, %d characters>", len(raw))
+		}
+		return "<adaptive card JSON omitted>"
 	}
 
 	var text string
