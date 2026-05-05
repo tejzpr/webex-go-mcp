@@ -226,43 +226,17 @@ func (m *MercuryManager) SubscribeMentions(
 			default:
 			}
 
-			matched := false
-
-			// Check 1: Is the decrypted content mentioning the target email?
 			content := m.getActivityContent(uc, activity)
-			if content != "" && strings.Contains(strings.ToLower(content), mentionPattern) {
-				matched = true
-			}
-
-			// Check 2: If we have a personId, also check for <@personId:XXXXX> pattern
-			if !matched && personID != "" {
-				personIDPattern := strings.ToLower("<@personid:" + personID)
-				if content != "" && strings.Contains(strings.ToLower(content), personIDPattern) {
-					matched = true
-				}
-			}
-
-			// Check 3: Is this an @all mention? (affects everyone in the room)
-			if !matched && content != "" && strings.Contains(strings.ToLower(content), "<@all>") {
-				matched = true
-			}
-
-			// Check 4: Is this a direct (1:1) message?
-			if !matched && includeDirect {
-				if isDirectRoom(activity) {
-					// In a 1:1 room, any message from the other person is a "direct message to us"
-					// Skip messages sent by the target user themselves
-					if activity.Actor != nil && strings.ToLower(activity.Actor.EmailAddress) != targetEmail {
-						matched = true
-					}
-				}
-			}
+			matched, matchType := matchMentionActivity(activity, content, mentionPattern, personID, targetEmail, includeDirect)
 
 			if !matched {
 				return
 			}
 
+			log.Printf("[Mercury] Mention subscription %s matched event: event=%s matchType=%s activity=%s session=%s",
+				subID, et, matchType, activityID(activity), sessionLabel(sessionID))
 			payload := m.buildMentionEventPayload(sub, et, activity, content)
+			payload["matchType"] = matchType
 			m.sendNotification(sessionID, payload)
 		}
 		uc.convClient.On(et, handler)
@@ -288,18 +262,56 @@ func (m *MercuryManager) SubscribeMentions(
 	return sub, nil
 }
 
+func matchMentionActivity(activity *conversation.Activity, content, mentionPattern, personID, targetEmail string, includeDirect bool) (bool, string) {
+	lowerContent := strings.ToLower(content)
+	if lowerContent != "" && strings.Contains(lowerContent, mentionPattern) {
+		return true, "mention"
+	}
+
+	if personID != "" {
+		personIDPattern := strings.ToLower("<@personid:" + personID)
+		if lowerContent != "" && strings.Contains(lowerContent, personIDPattern) {
+			return true, "mention"
+		}
+	}
+
+	if lowerContent != "" && strings.Contains(lowerContent, "<@all>") {
+		return true, "mention_all"
+	}
+
+	if includeDirect && isDirectRoom(activity) && activity.Actor != nil &&
+		!strings.EqualFold(strings.TrimSpace(activity.Actor.EmailAddress), targetEmail) {
+		return true, "direct_message"
+	}
+
+	return false, ""
+}
+
 // isDirectRoom checks if the activity's target room is a 1:1 (direct) conversation.
-// Webex marks 1:1 rooms with the "ONE_ON_ONE" tag in the conversation target.
+// Webex commonly marks 1:1 rooms with a ONE_ON_ONE-style tag, but the exact
+// spelling varies between Mercury payloads. Some payloads only carry the two
+// room participants, so use that as a fallback.
 func isDirectRoom(activity *conversation.Activity) bool {
-	if activity.Target == nil {
+	if activity == nil || activity.Target == nil {
 		return false
 	}
 	for _, tag := range activity.Target.Tags {
-		if tag == "ONE_ON_ONE" {
+		normalized := normalizeWebexTag(tag)
+		if normalized == "ONEONONE" || normalized == "DIRECT" || strings.Contains(normalized, "ONE_ON_ONE") {
 			return true
 		}
 	}
+	if activity.Target.Participants != nil && len(activity.Target.Participants.Items) == 2 {
+		return true
+	}
 	return false
+}
+
+func normalizeWebexTag(tag string) string {
+	normalized := strings.ToUpper(strings.TrimSpace(tag))
+	normalized = strings.ReplaceAll(normalized, "-", "_")
+	normalized = strings.ReplaceAll(normalized, " ", "_")
+	return normalized
 }
 
 // getActivityContent extracts the decrypted message content from an activity.
@@ -624,8 +636,27 @@ func (m *MercuryManager) sendNotification(sessionID string, payload map[string]i
 	}
 
 	if err != nil {
-		log.Printf("[Mercury] Failed to send notification to session %s: %v", sessionID, err)
+		log.Printf("[Mercury] Failed to send notification to session %s: %v", sessionLabel(sessionID), err)
+	} else {
+		log.Printf("[Mercury] Sent notification to session %s", sessionLabel(sessionID))
 	}
+}
+
+func activityID(activity *conversation.Activity) string {
+	if activity == nil || activity.ID == "" {
+		return "(unknown)"
+	}
+	return activity.ID
+}
+
+func sessionLabel(sessionID string) string {
+	if sessionID == "" {
+		return "(broadcast)"
+	}
+	if len(sessionID) <= 8 {
+		return sessionID
+	}
+	return sessionID[:8] + "..."
 }
 
 func hashToken(token string) string {

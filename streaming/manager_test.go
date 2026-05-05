@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"testing"
 	"time"
+
+	"github.com/WebexCommunity/webex-go-sdk/v2/conversation"
 )
 
 func TestNewMercuryManager(t *testing.T) {
@@ -140,6 +142,80 @@ func TestUnsubscribe_NonExistentID(t *testing.T) {
 	}
 	if err.Error() != "subscription non-existent-id not found" {
 		t.Errorf("unexpected error message: %q", err.Error())
+	}
+}
+
+func TestIsDirectRoomRecognizesTagVariants(t *testing.T) {
+	cases := []string{
+		"ONE_ON_ONE",
+		"one-on-one",
+		"ONE_ON_ONE_CONVERSATION",
+		" direct ",
+	}
+
+	for _, tag := range cases {
+		activity := &conversation.Activity{
+			Target: &conversation.Target{Tags: []string{tag}},
+		}
+		if !isDirectRoom(activity) {
+			t.Errorf("isDirectRoom() = false for tag %q, want true", tag)
+		}
+	}
+}
+
+func TestIsDirectRoomFallsBackToTwoParticipants(t *testing.T) {
+	activity := &conversation.Activity{
+		Target: &conversation.Target{
+			Participants: &conversation.Participants{
+				Items: []interface{}{"person-1", "person-2"},
+			},
+		},
+	}
+
+	if !isDirectRoom(activity) {
+		t.Fatal("isDirectRoom() = false for two participants, want true")
+	}
+}
+
+func TestMatchMentionActivityDirectMessage(t *testing.T) {
+	activity := &conversation.Activity{
+		Actor: &conversation.Actor{EmailAddress: "sender@example.com"},
+		Target: &conversation.Target{
+			Tags: []string{"one-on-one"},
+		},
+	}
+
+	matched, matchType := matchMentionActivity(
+		activity,
+		"",
+		"<@personemail:target@example.com",
+		"",
+		"target@example.com",
+		true,
+	)
+	if !matched || matchType != "direct_message" {
+		t.Fatalf("matchMentionActivity() = (%v, %q), want (true, direct_message)", matched, matchType)
+	}
+}
+
+func TestMatchMentionActivitySkipsOwnDirectMessage(t *testing.T) {
+	activity := &conversation.Activity{
+		Actor: &conversation.Actor{EmailAddress: "target@example.com"},
+		Target: &conversation.Target{
+			Tags: []string{"ONE_ON_ONE"},
+		},
+	}
+
+	matched, matchType := matchMentionActivity(
+		activity,
+		"",
+		"<@personemail:target@example.com",
+		"",
+		"target@example.com",
+		true,
+	)
+	if matched || matchType != "" {
+		t.Fatalf("matchMentionActivity() = (%v, %q), want (false, empty)", matched, matchType)
 	}
 }
 
