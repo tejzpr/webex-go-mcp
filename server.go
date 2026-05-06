@@ -290,6 +290,7 @@ func startHTTPServer(cfg *HTTPServerConfig) error {
 	// but mcp-go creates a new context for tool handlers. WithHTTPContextFunc
 	// bridges the two by copying our context values into the MCP context.
 	streamableServer := server.NewStreamableHTTPServer(mcpServer,
+		server.WithHeartbeatInterval(15*time.Second),
 		server.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
 			// Copy Webex client from HTTP request context to MCP tool handler context
 			if client, ok := auth.WebexClientFromContext(r.Context()); ok {
