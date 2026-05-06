@@ -11,6 +11,7 @@ import (
 	webex "github.com/WebexCommunity/webex-go-sdk/v2"
 	"github.com/WebexCommunity/webex-go-sdk/v2/webexsdk"
 	"github.com/tejzpr/webex-go-mcp/auth"
+	"github.com/tejzpr/webex-go-mcp/streaming"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -39,6 +40,7 @@ func main() {
 	rootCmd.Flags().Bool("readonly-minimal", false, "Enable a readonly minimal tool set: only read/list/get operations for messages, rooms, teams, meetings, and transcripts. Adds to --include. (env: WEBEX_READONLY_MINIMAL)")
 	rootCmd.Flags().Bool("shared-env-minimal", false, "Enable a shared-environment-safe minimal tool set: person lookup and outbound message tools only. Adds to --include. (env: WEBEX_SHARED_ENV_MINIMAL)")
 	rootCmd.Flags().Bool("enable-mcp-elicitation", false, "Require MCP elicitation approval before mutating Webex tools run. Fails closed when the client does not support elicitation. (env: WEBEX_ENABLE_MCP_ELICITATION)")
+	rootCmd.Flags().String("streaming-ignore-from-emails", "", "Comma-separated sender email addresses to drop from Mercury streaming notifications. Use this to suppress messages sent by the bot itself. (env: WEBEX_STREAMING_IGNORE_FROM_EMAILS)")
 
 	// HTTP mode flags
 	rootCmd.Flags().String("host", "localhost", "HTTP server bind host (env: WEBEX_HOST)")
@@ -66,6 +68,7 @@ func main() {
 	_ = viper.BindPFlag("readonly_minimal", rootCmd.Flags().Lookup("readonly-minimal"))
 	_ = viper.BindPFlag("shared_env_minimal", rootCmd.Flags().Lookup("shared-env-minimal"))
 	_ = viper.BindPFlag("enable_mcp_elicitation", rootCmd.Flags().Lookup("enable-mcp-elicitation"))
+	_ = viper.BindPFlag("streaming_ignore_from_emails", rootCmd.Flags().Lookup("streaming-ignore-from-emails"))
 	_ = viper.BindPFlag("host", rootCmd.Flags().Lookup("host"))
 	_ = viper.BindPFlag("port", rootCmd.Flags().Lookup("port"))
 	_ = viper.BindPFlag("client_id", rootCmd.Flags().Lookup("client-id"))
@@ -92,6 +95,7 @@ func main() {
 	_ = viper.BindEnv("readonly_minimal", "WEBEX_READONLY_MINIMAL")
 	_ = viper.BindEnv("shared_env_minimal", "WEBEX_SHARED_ENV_MINIMAL")
 	_ = viper.BindEnv("enable_mcp_elicitation", "WEBEX_ENABLE_MCP_ELICITATION")
+	_ = viper.BindEnv("streaming_ignore_from_emails", "WEBEX_STREAMING_IGNORE_FROM_EMAILS", "WEBEX_STREAMING_IGNORE_FROM_EMAIL")
 	_ = viper.BindEnv("host", "WEBEX_HOST")
 	_ = viper.BindEnv("port", "WEBEX_PORT")
 	_ = viper.BindEnv("client_id", "WEBEX_CLIENT_ID")
@@ -126,6 +130,7 @@ func run(cmd *cobra.Command, args []string) error {
 	readonlyMinimal := viper.GetBool("readonly_minimal")
 	sharedEnvMinimal := viper.GetBool("shared_env_minimal")
 	enableMCPElicitation := viper.GetBool("enable_mcp_elicitation")
+	streamingIgnoreFromEmails := streaming.ParseIgnoredSenderEmails(viper.GetString("streaming_ignore_from_emails"))
 
 	sdkConfig := &webexsdk.Config{
 		BaseURL: webexAPIBaseURL,
@@ -134,15 +139,15 @@ func run(cmd *cobra.Command, args []string) error {
 
 	switch mode {
 	case "stdio":
-		return runSTDIO(sdkConfig, includeTools, excludeTools, minimal, readonlyMinimal, sharedEnvMinimal, enableMCPElicitation)
+		return runSTDIO(sdkConfig, includeTools, excludeTools, minimal, readonlyMinimal, sharedEnvMinimal, enableMCPElicitation, streamingIgnoreFromEmails)
 	case "http":
-		return runHTTP(sdkConfig, includeTools, excludeTools, minimal, readonlyMinimal, sharedEnvMinimal, enableMCPElicitation)
+		return runHTTP(sdkConfig, includeTools, excludeTools, minimal, readonlyMinimal, sharedEnvMinimal, enableMCPElicitation, streamingIgnoreFromEmails)
 	default:
 		return fmt.Errorf("invalid mode %q: must be 'stdio' or 'http'", mode)
 	}
 }
 
-func runSTDIO(sdkConfig *webexsdk.Config, include, exclude string, minimal, readonlyMinimal, sharedEnvMinimal, enableMCPElicitation bool) error {
+func runSTDIO(sdkConfig *webexsdk.Config, include, exclude string, minimal, readonlyMinimal, sharedEnvMinimal, enableMCPElicitation bool, streamingIgnoreFromEmails []string) error {
 	accessToken := viper.GetString("access_token")
 	if accessToken == "" {
 		return fmt.Errorf("WEBEX_ACCESS_TOKEN environment variable or --access-token flag is required in stdio mode")
@@ -156,7 +161,7 @@ func runSTDIO(sdkConfig *webexsdk.Config, include, exclude string, minimal, read
 	resolver := auth.NewStaticClientResolver(webexClient)
 
 	log.Printf("Starting Webex MCP Server v%s in STDIO mode (base_url=%s, timeout=%s)", version, sdkConfig.BaseURL, sdkConfig.Timeout)
-	return startSTDIOServer(resolver, include, exclude, minimal, readonlyMinimal, sharedEnvMinimal, enableMCPElicitation)
+	return startSTDIOServer(resolver, include, exclude, minimal, readonlyMinimal, sharedEnvMinimal, enableMCPElicitation, streamingIgnoreFromEmails)
 }
 
 func normalizeHTTPBaseURL(raw string) (string, error) {
@@ -184,7 +189,7 @@ func normalizeHTTPBaseURL(raw string) (string, error) {
 	return strings.TrimRight(parsed.String(), "/"), nil
 }
 
-func runHTTP(sdkConfig *webexsdk.Config, include, exclude string, minimal, readonlyMinimal, sharedEnvMinimal, enableMCPElicitation bool) error {
+func runHTTP(sdkConfig *webexsdk.Config, include, exclude string, minimal, readonlyMinimal, sharedEnvMinimal, enableMCPElicitation bool, streamingIgnoreFromEmails []string) error {
 	accessToken := viper.GetString("access_token")
 	clientID := viper.GetString("client_id")
 	clientSecret := viper.GetString("client_secret")
@@ -267,12 +272,13 @@ func runHTTP(sdkConfig *webexsdk.Config, include, exclude string, minimal, reado
 			Type: storeType,
 			DSN:  storeDSN,
 		},
-		Include:              include,
-		Exclude:              exclude,
-		Minimal:              minimal,
-		ReadonlyMinimal:      readonlyMinimal,
-		SharedEnvMinimal:     sharedEnvMinimal,
-		EnableMCPElicitation: enableMCPElicitation,
-		CORSOrigins:          corsOrigins,
+		Include:                   include,
+		Exclude:                   exclude,
+		Minimal:                   minimal,
+		ReadonlyMinimal:           readonlyMinimal,
+		SharedEnvMinimal:          sharedEnvMinimal,
+		EnableMCPElicitation:      enableMCPElicitation,
+		CORSOrigins:               corsOrigins,
+		StreamingIgnoreFromEmails: streamingIgnoreFromEmails,
 	})
 }

@@ -27,6 +27,46 @@ func TestNewMercuryManager(t *testing.T) {
 	}
 }
 
+func TestParseIgnoredSenderEmails(t *testing.T) {
+	got := ParseIgnoredSenderEmails(" bot@example.com, , Odin@Example.com ")
+	want := []string{"bot@example.com", "Odin@Example.com"}
+	if len(got) != len(want) {
+		t.Fatalf("ParseIgnoredSenderEmails length = %d, want %d: %#v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ParseIgnoredSenderEmails[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestShouldIgnoreActivityBySenderEmail(t *testing.T) {
+	m := NewMercuryManagerWithIgnoredSenderEmails(nil, []string{" bot@example.com ", "odin@example.com"})
+
+	activity := &conversation.Activity{
+		Actor: &conversation.Actor{EmailAddress: "BOT@example.com"},
+	}
+	if !m.shouldIgnoreActivity(activity) {
+		t.Fatal("shouldIgnoreActivity() = false for ignored sender email, want true")
+	}
+
+	activity.Actor.EmailAddress = "person@example.com"
+	if m.shouldIgnoreActivity(activity) {
+		t.Fatal("shouldIgnoreActivity() = true for non-ignored sender email, want false")
+	}
+}
+
+func TestShouldIgnoreActivityHandlesMissingActor(t *testing.T) {
+	m := NewMercuryManagerWithIgnoredSenderEmails(nil, []string{"bot@example.com"})
+
+	if m.shouldIgnoreActivity(nil) {
+		t.Fatal("shouldIgnoreActivity(nil) = true, want false")
+	}
+	if m.shouldIgnoreActivity(&conversation.Activity{}) {
+		t.Fatal("shouldIgnoreActivity(activity without actor) = true, want false")
+	}
+}
+
 func TestListSubscriptions_FiltersBySessionID(t *testing.T) {
 	m := NewMercuryManager(nil)
 

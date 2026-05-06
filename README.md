@@ -54,6 +54,7 @@ Configuration is loaded via environment variables and/or CLI flags. CLI flags ta
 | `WEBEX_READONLY_MINIMAL` | `--readonly-minimal` | No | `false` | Enable readonly minimal tool set |
 | `WEBEX_SHARED_ENV_MINIMAL` | `--shared-env-minimal` | No | `false` | Enable shared-environment-safe minimal tool set |
 | `WEBEX_ENABLE_MCP_ELICITATION` | `--enable-mcp-elicitation` | No | `false` | Require MCP elicitation approval before mutating Webex tools run. If the client does not support elicitation, protected actions fail closed |
+| `WEBEX_STREAMING_IGNORE_FROM_EMAILS` | `--streaming-ignore-from-emails` | No | - | Comma-separated sender emails to drop from Mercury streaming notifications, useful for suppressing messages sent by the bot itself |
 
 ### STDIO Mode Options
 

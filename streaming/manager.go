@@ -39,10 +39,11 @@ type Subscription struct {
 // MercuryManager manages per-user Mercury connections and multiplexes
 // conversation events to MCP client sessions as notifications.
 type MercuryManager struct {
-	mu            sync.RWMutex
-	subscriptions map[string]*Subscription   // subscriptionId → sub
-	userConns     map[string]*userConnection // tokenHash → connection
-	mcpServer     *server.MCPServer
+	mu                  sync.RWMutex
+	subscriptions       map[string]*Subscription   // subscriptionId → sub
+	userConns           map[string]*userConnection // tokenHash → connection
+	mcpServer           *server.MCPServer
+	ignoredSenderEmails map[string]struct{}
 }
 
 // userConnection holds a per-user Mercury/Conversation connection.
@@ -57,11 +58,64 @@ type userConnection struct {
 
 // NewMercuryManager creates a new MercuryManager.
 func NewMercuryManager(mcpServer *server.MCPServer) *MercuryManager {
+	return NewMercuryManagerWithIgnoredSenderEmails(mcpServer, nil)
+}
+
+// NewMercuryManagerWithIgnoredSenderEmails creates a MercuryManager that drops
+// incoming stream activities authored by any configured sender email.
+func NewMercuryManagerWithIgnoredSenderEmails(mcpServer *server.MCPServer, emails []string) *MercuryManager {
+	ignored := normalizeEmailSet(emails)
 	return &MercuryManager{
-		subscriptions: make(map[string]*Subscription),
-		userConns:     make(map[string]*userConnection),
-		mcpServer:     mcpServer,
+		subscriptions:       make(map[string]*Subscription),
+		userConns:           make(map[string]*userConnection),
+		mcpServer:           mcpServer,
+		ignoredSenderEmails: ignored,
 	}
+}
+
+func normalizeEmailSet(emails []string) map[string]struct{} {
+	if len(emails) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(emails))
+	for _, email := range emails {
+		normalized := strings.ToLower(strings.TrimSpace(email))
+		if normalized != "" {
+			set[normalized] = struct{}{}
+		}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	return set
+}
+
+// ParseIgnoredSenderEmails parses a comma-separated env/config value.
+func ParseIgnoredSenderEmails(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	emails := make([]string, 0, len(parts))
+	for _, part := range parts {
+		email := strings.TrimSpace(part)
+		if email != "" {
+			emails = append(emails, email)
+		}
+	}
+	return emails
+}
+
+func (m *MercuryManager) shouldIgnoreActivity(activity *conversation.Activity) bool {
+	if m == nil || len(m.ignoredSenderEmails) == 0 || activity == nil || activity.Actor == nil {
+		return false
+	}
+	email := strings.ToLower(strings.TrimSpace(activity.Actor.EmailAddress))
+	if email == "" {
+		return false
+	}
+	_, ignored := m.ignoredSenderEmails[email]
+	return ignored
 }
 
 // Subscribe creates a new subscription for room messages.
@@ -124,6 +178,11 @@ func (m *MercuryManager) Subscribe(
 				if activity.Target.GlobalID != roomID {
 					return
 				}
+			}
+			if m.shouldIgnoreActivity(activity) {
+				log.Printf("[Mercury] Dropping ignored sender activity: subscription=%s event=%s activity=%s sender=%s",
+					subID, et, activityID(activity), activity.Actor.EmailAddress)
+				return
 			}
 
 			payload := m.buildEventPayload(sub, et, activity)
@@ -224,6 +283,12 @@ func (m *MercuryManager) SubscribeMentions(
 			case <-subCtx.Done():
 				return
 			default:
+			}
+
+			if m.shouldIgnoreActivity(activity) {
+				log.Printf("[Mercury] Dropping ignored sender mention activity: subscription=%s event=%s activity=%s sender=%s",
+					subID, et, activityID(activity), activity.Actor.EmailAddress)
+				return
 			}
 
 			content := m.getActivityContent(uc, activity)
@@ -471,6 +536,11 @@ func (m *MercuryManager) WaitForMessage(
 			if activity.Target.ID != roomID && activity.Target.GlobalID != roomID {
 				return
 			}
+		}
+		if m.shouldIgnoreActivity(activity) {
+			log.Printf("[Mercury] Dropping ignored sender wait activity: activity=%s sender=%s",
+				activityID(activity), activity.Actor.EmailAddress)
+			return
 		}
 
 		content, _ := uc.convClient.GetMessageContent(activity)
