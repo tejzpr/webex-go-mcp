@@ -450,6 +450,109 @@ func (m *MercuryManager) buildMentionEventPayload(sub *Subscription, eventType s
 	return payload
 }
 
+// SubscribeDirectMessages creates a subscription that only delivers messages from
+// 1:1 (direct) conversations. Unlike SubscribeMentions, this ignores @mentions and
+// @all — it purely streams DMs so an AI can have a direct conversation with the user.
+func (m *MercuryManager) SubscribeDirectMessages(
+	ctx context.Context,
+	client *webex.WebexClient,
+	accessToken string,
+	targetEmail string,
+) (*Subscription, error) {
+	if targetEmail == "" {
+		return nil, fmt.Errorf("target email is required")
+	}
+	targetEmail = strings.ToLower(strings.TrimSpace(targetEmail))
+
+	tokHash := hashToken(accessToken)
+
+	// Get or create the user's Mercury connection
+	uc, err := m.getOrCreateConnection(client, tokHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Mercury connection: %w", err)
+	}
+
+	// Generate subscription ID
+	subID := fmt.Sprintf("dmsub_%x", sha256.Sum256([]byte(fmt.Sprintf("%s_%s_%d", tokHash, targetEmail, time.Now().UnixNano()))))[:22]
+
+	// Get the session ID from context for targeted notifications
+	sessionID := ""
+	if session := server.ClientSessionFromContext(ctx); session != nil {
+		sessionID = session.SessionID()
+	}
+
+	subCtx, cancel := context.WithCancel(context.Background())
+
+	sub := &Subscription{
+		ID:        subID,
+		Email:     targetEmail,
+		TokenHash: tokHash,
+		SessionID: sessionID,
+		CreatedAt: time.Now(),
+		cancel:    cancel,
+	}
+
+	m.mu.Lock()
+	m.subscriptions[subID] = sub
+	m.mu.Unlock()
+
+	// Register handlers for post and share events — only deliver 1:1 messages
+	for _, eventType := range []string{"post", "share"} {
+		et := eventType
+		handler := func(activity *conversation.Activity) {
+			select {
+			case <-subCtx.Done():
+				return
+			default:
+			}
+
+			// Only deliver messages from 1:1 (direct) rooms
+			if !isDirectRoom(activity) {
+				return
+			}
+
+			// Skip messages sent by the target user themselves
+			if activity.Actor != nil && strings.EqualFold(strings.TrimSpace(activity.Actor.EmailAddress), targetEmail) {
+				return
+			}
+
+			if m.shouldIgnoreActivity(activity) {
+				log.Printf("[Mercury] Dropping ignored sender DM activity: subscription=%s event=%s activity=%s sender=%s",
+					subID, et, activityID(activity), activity.Actor.EmailAddress)
+				return
+			}
+
+			content := m.getActivityContent(uc, activity)
+
+			log.Printf("[Mercury] DM subscription %s matched event: event=%s activity=%s session=%s",
+				subID, et, activityID(activity), sessionLabel(sessionID))
+
+			payload := m.buildMentionEventPayload(sub, et, activity, content)
+			payload["matchType"] = "direct_message"
+			m.sendNotification(sessionID, payload)
+		}
+		uc.convClient.On(et, handler)
+		sub.handlers = append(sub.handlers, eventHandler{eventType: et, handler: handler})
+	}
+
+	// Ensure Mercury is connected
+	uc.mu.Lock()
+	if !uc.connected {
+		log.Printf("[Mercury] Connecting Mercury for user (hash=%s...)", tokHash[:8])
+		if err := uc.convClient.Connect(); err != nil {
+			uc.mu.Unlock()
+			m.Unsubscribe(subID)
+			return nil, fmt.Errorf("failed to connect Mercury: %w", err)
+		}
+		uc.connected = true
+		log.Printf("[Mercury] Connected successfully for user (hash=%s...)", tokHash[:8])
+	}
+	uc.mu.Unlock()
+
+	log.Printf("[Mercury] DM subscription %s created: email=%s session=%s", subID, targetEmail, sessionID)
+	return sub, nil
+}
+
 // Unsubscribe cancels a subscription and cleans up resources.
 func (m *MercuryManager) Unsubscribe(subscriptionID string) error {
 	m.mu.Lock()

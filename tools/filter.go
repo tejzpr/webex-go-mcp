@@ -163,7 +163,7 @@ var (
 		"webex_teams_list", "webex_teams_create", "webex_teams_get", "webex_teams_update",
 		"webex_meetings_list", "webex_meetings_create", "webex_meetings_get", "webex_meetings_update", "webex_meetings_delete", "webex_meetings_list_participants",
 		"webex_transcripts_list", "webex_transcripts_download", "webex_transcripts_list_snippets", "webex_transcripts_get_snippet", "webex_transcripts_update_snippet",
-		"webex_subscribe_room_messages", "webex_subscribe_mentions", "webex_unsubscribe", "webex_wait_for_message", "webex_list_subscriptions",
+		"webex_subscribe_room_messages", "webex_subscribe_mentions", "webex_subscribe_direct_messages", "webex_unsubscribe", "webex_wait_for_message", "webex_list_subscriptions",
 		"webex_fetch_next_page",
 	}
 
@@ -188,7 +188,7 @@ var (
 		"webex_teams_list", "webex_teams_get",
 		"webex_meetings_list", "webex_meetings_get", "webex_meetings_list_participants",
 		"webex_transcripts_list", "webex_transcripts_download", "webex_transcripts_list_snippets", "webex_transcripts_get_snippet",
-		"webex_subscribe_room_messages", "webex_subscribe_mentions", "webex_unsubscribe", "webex_wait_for_message", "webex_list_subscriptions",
+		"webex_subscribe_room_messages", "webex_subscribe_mentions", "webex_subscribe_direct_messages", "webex_unsubscribe", "webex_wait_for_message", "webex_list_subscriptions",
 		"webex_fetch_next_page",
 	}
 )

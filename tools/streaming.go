@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -125,10 +126,60 @@ func RegisterStreamingTools(s ToolRegistrar, resolver auth.ClientResolver, manag
 		},
 	)
 
+	// subscribe_direct_messages — opens a Mercury listener for 1:1 DMs only
+	s.AddTool(
+		mcp.NewTool("webex_subscribe_direct_messages",
+			mcp.WithDescription("Subscribe to real-time direct messages (1:1 conversations) sent to a specific email address. "+
+				"This is the simplest way for an AI to have a live conversation with a user via Webex DMs.\n\n"+
+				"Unlike webex_subscribe_mentions, this tool ONLY delivers messages from 1:1 rooms — "+
+				"no @mentions, no @all, no group room messages. It filters purely for direct conversations.\n\n"+
+				"Returns immediately with a subscriptionId. Incoming DMs are streamed as MCP notifications with matchType='direct_message'. "+
+				"The AI can then respond using webex_messages_create with toPersonEmail.\n\n"+
+				"Use webex_unsubscribe to stop. Requires HTTP mode with OAuth authentication."),
+			mcp.WithString("email",
+				mcp.Required(),
+				mcp.Description("The email address to listen for direct messages. Messages from 1:1 conversations with this user will be streamed.")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
+			email := req.GetString("email", "")
+			if email == "" {
+				return mcp.NewToolResultError("email is required"), nil
+			}
+
+			// Get the access token from context (HTTP mode) or from the client (STDIO mode)
+			accessToken, ok := auth.WebexTokenFromContext(ctx)
+			if !ok || accessToken == "" {
+				accessToken = client.Core().GetAccessToken()
+			}
+			if accessToken == "" {
+				return mcp.NewToolResultError("No access token available for Mercury connection."), nil
+			}
+
+			sub, err := manager.SubscribeDirectMessages(ctx, client, accessToken, email)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to subscribe: %v", err)), nil
+			}
+
+			result := map[string]interface{}{
+				"subscriptionId": sub.ID,
+				"email":          sub.Email,
+				"status":         "listening",
+				"message":        "DM subscription active. Direct messages will be streamed as MCP notifications. Respond using webex_messages_create with toPersonEmail. Use webex_unsubscribe to stop.",
+			}
+			data, _ := json.MarshalIndent(result, "", "  ")
+			return mcp.NewToolResultText(string(data)), nil
+		},
+	)
+
 	// unsubscribe — cancels a Mercury subscription
 	s.AddTool(
 		mcp.NewTool("webex_unsubscribe",
-			mcp.WithDescription("Cancel a Mercury event subscription created by webex_subscribe_room_messages or webex_subscribe_mentions. "+
+			mcp.WithDescription("Cancel a Mercury event subscription created by webex_subscribe_room_messages, webex_subscribe_mentions, or webex_subscribe_direct_messages. "+
 				"Stops streaming events for the given subscription."),
 			mcp.WithString("subscriptionId",
 				mcp.Required(),
@@ -224,7 +275,10 @@ func RegisterStreamingTools(s ToolRegistrar, resolver auth.ClientResolver, manag
 					"subscriptionId": sub.ID,
 					"createdAt":      sub.CreatedAt.Format(time.RFC3339),
 				}
-				if sub.Email != "" {
+				if strings.HasPrefix(sub.ID, "dmsub_") {
+					item["type"] = "direct_messages"
+					item["email"] = sub.Email
+				} else if sub.Email != "" {
 					item["type"] = "mentions"
 					item["email"] = sub.Email
 					item["personId"] = sub.PersonID
