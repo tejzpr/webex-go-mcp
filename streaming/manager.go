@@ -23,17 +23,28 @@ type eventHandler struct {
 	handler   func(*conversation.Activity)
 }
 
+// Mention-token prefixes used in decrypted Webex activity content.
+// Full syntax: <@personEmail:user@example.com|DisplayName>, <@personId:UUID|Name>, <@all>.
+// Kept as lowercase constants because all matching is done on lowercased content.
+const (
+	mentionEmailPrefix = "<@personemail:"
+	mentionIDPrefix    = "<@personid:"
+	mentionAllToken    = "<@all>"
+)
+
 // Subscription represents an active Mercury event subscription.
 type Subscription struct {
-	ID        string
-	RoomID    string
-	Email     string // target email for mention subscriptions
-	PersonID  string // resolved person ID for mention subscriptions
-	TokenHash string
-	SessionID string
-	CreatedAt time.Time
-	cancel    context.CancelFunc
-	handlers  []eventHandler
+	ID           string
+	RoomID       string
+	Rooms        []string // scoped room list for from-person subscriptions (empty => direct/all)
+	Email        string   // target email for mentions; sender email for from-person
+	PersonID     string   // resolved person ID: mention target, or caller (from-person)
+	MentionsOnly bool     // from-person: require a mention of the caller or @all
+	TokenHash    string
+	SessionID    string
+	CreatedAt    time.Time
+	cancel       context.CancelFunc
+	handlers     []eventHandler
 }
 
 // MercuryManager manages per-user Mercury connections and multiplexes
@@ -273,7 +284,7 @@ func (m *MercuryManager) SubscribeMentions(
 
 	// Build the mention pattern to search for in decrypted content
 	// Webex mention syntax: <@personEmail:user@example.com|DisplayName>
-	mentionPattern := strings.ToLower("<@personemail:" + targetEmail)
+	mentionPattern := mentionEmailPrefix + targetEmail
 
 	// Register handlers for post and share events (no room filter — listen to everything)
 	for _, eventType := range []string{"post", "share"} {
@@ -300,7 +311,7 @@ func (m *MercuryManager) SubscribeMentions(
 
 			log.Printf("[Mercury] Mention subscription %s matched event: event=%s matchType=%s activity=%s session=%s",
 				subID, et, matchType, activityID(activity), sessionLabel(sessionID))
-			payload := m.buildMentionEventPayload(sub, et, activity, content)
+			payload := m.buildMentionEventPayload(sub, et, "targetEmail", activity, content)
 			payload["matchType"] = matchType
 			m.sendNotification(sessionID, payload)
 		}
@@ -334,13 +345,13 @@ func matchMentionActivity(activity *conversation.Activity, content, mentionPatte
 	}
 
 	if personID != "" {
-		personIDPattern := strings.ToLower("<@personid:" + personID)
+		personIDPattern := mentionIDPrefix + strings.ToLower(personID)
 		if lowerContent != "" && strings.Contains(lowerContent, personIDPattern) {
 			return true, "mention"
 		}
 	}
 
-	if lowerContent != "" && strings.Contains(lowerContent, "<@all>") {
+	if lowerContent != "" && strings.Contains(lowerContent, mentionAllToken) {
 		return true, "mention_all"
 	}
 
@@ -350,6 +361,100 @@ func matchMentionActivity(activity *conversation.Activity, content, mentionPatte
 	}
 
 	return false, ""
+}
+
+// matchFromPersonActivity reports whether an activity is a message sent BY personEmail
+// that satisfies the room scope and optional mention filter.
+//
+//   - Sender gate (always): activity.Actor.EmailAddress == personEmail.
+//   - Room gate: empty roomSet + !mentionsOnly => 1:1 (direct) rooms only;
+//     empty roomSet + mentionsOnly => any room (the mention narrows);
+//     non-empty roomSet => Target.ID or Target.GlobalID must be in the set.
+//   - Mention gate (only when mentionsOnly): the message must mention the caller
+//     (by email or person ID) or mention everyone (@all). A third-party mention
+//     does not qualify.
+//
+// personEmail must be lowercased and trimmed by the caller. callerEmail/callerPersonID
+// are only consulted when mentionsOnly is true.
+func matchFromPersonActivity(
+	activity *conversation.Activity,
+	content, personEmail string,
+	roomSet map[string]bool,
+	mentionsOnly bool,
+	callerEmail, callerPersonID string,
+) (bool, string) {
+	// 1. Sender gate — personEmail is always the author filter.
+	if activity == nil || activity.Actor == nil {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(activity.Actor.EmailAddress), personEmail) {
+		return false, ""
+	}
+
+	// 2. Room scope gate.
+	if len(roomSet) == 0 {
+		if !mentionsOnly && !isDirectRoom(activity) {
+			return false, "" // empty rooms, no mention filter => direct (1:1) only
+		}
+		// empty rooms + mentionsOnly => listen across all rooms; mention narrows below.
+	} else {
+		if activity.Target == nil {
+			return false, ""
+		}
+		if !roomSet[activity.Target.ID] && !roomSet[activity.Target.GlobalID] {
+			return false, ""
+		}
+	}
+
+	// 3. Mention gate.
+	if mentionsOnly {
+		lower := strings.ToLower(content)
+		if lower == "" {
+			return false, ""
+		}
+		mentionsCaller := (callerEmail != "" && containsMention(lower, mentionEmailPrefix, callerEmail)) ||
+			(callerPersonID != "" && containsMention(lower, mentionIDPrefix, strings.ToLower(callerPersonID)))
+		switch {
+		case mentionsCaller:
+			return true, "from_person_mention"
+		case strings.Contains(lower, mentionAllToken):
+			return true, "from_person_mention_all"
+		default:
+			return false, "" // third-party mention (or none) does not qualify
+		}
+	}
+
+	// 4. No mention filter — sender and scope already satisfied.
+	if isDirectRoom(activity) {
+		return true, "from_person_direct"
+	}
+	return true, "from_person"
+}
+
+// containsMention reports whether lowerContent mentions a target identifier using
+// the given Webex mention prefix. The Webex syntax is <@personEmail:user@example.com>
+// or <@personId:ID>, with an optional "|DisplayName" alias before the closing ">".
+// We require the identifier to be terminated by ">" or "|" so that a prefix collision
+// (e.g. a longer email or ID that begins with the target) does not produce a false match.
+// prefix and identifier must already be lowercased by the caller.
+func containsMention(lowerContent, prefix, identifier string) bool {
+	needle := prefix + identifier
+	from := 0
+	for {
+		idx := strings.Index(lowerContent[from:], needle)
+		if idx < 0 {
+			return false
+		}
+		end := from + idx + len(needle)
+		if end >= len(lowerContent) {
+			// Truncated/malformed token at the very end — treat as no clean match.
+			return false
+		}
+		if c := lowerContent[end]; c == '>' || c == '|' {
+			return true
+		}
+		from = end // keep scanning; this was a prefix of a longer identifier
+	}
 }
 
 // isDirectRoom checks if the activity's target room is a 1:1 (direct) conversation.
@@ -406,11 +511,15 @@ func (m *MercuryManager) getActivityContent(uc *userConnection, activity *conver
 }
 
 // buildMentionEventPayload creates a notification payload for a mention/DM event.
-func (m *MercuryManager) buildMentionEventPayload(sub *Subscription, eventType string, activity *conversation.Activity, content string) map[string]interface{} {
+// buildMentionEventPayload creates a notification payload for a mention/DM/from-person event.
+// emailKey controls the key under which sub.Email is reported ("targetEmail" for mention
+// and DM subscriptions, "personEmail" for from-person subscriptions). The caller may override
+// the "matchType" afterwards; the value computed here is a best-effort default.
+func (m *MercuryManager) buildMentionEventPayload(sub *Subscription, eventType, emailKey string, activity *conversation.Activity, content string) map[string]interface{} {
 	matchType := "mention"
 	if isDirectRoom(activity) {
 		matchType = "direct_message"
-	} else if content != "" && strings.Contains(strings.ToLower(content), "<@all>") {
+	} else if content != "" && strings.Contains(strings.ToLower(content), mentionAllToken) {
 		matchType = "mention_all"
 	}
 
@@ -418,7 +527,7 @@ func (m *MercuryManager) buildMentionEventPayload(sub *Subscription, eventType s
 		"subscriptionId": sub.ID,
 		"eventType":      eventType,
 		"matchType":      matchType,
-		"targetEmail":    sub.Email,
+		emailKey:         sub.Email,
 		"timestamp":      activity.Published,
 	}
 
@@ -527,7 +636,7 @@ func (m *MercuryManager) SubscribeDirectMessages(
 			log.Printf("[Mercury] DM subscription %s matched event: event=%s activity=%s session=%s",
 				subID, et, activityID(activity), sessionLabel(sessionID))
 
-			payload := m.buildMentionEventPayload(sub, et, activity, content)
+			payload := m.buildMentionEventPayload(sub, et, "targetEmail", activity, content)
 			payload["matchType"] = "direct_message"
 			m.sendNotification(sessionID, payload)
 		}
@@ -550,6 +659,123 @@ func (m *MercuryManager) SubscribeDirectMessages(
 	uc.mu.Unlock()
 
 	log.Printf("[Mercury] DM subscription %s created: email=%s session=%s", subID, targetEmail, sessionID)
+	return sub, nil
+}
+
+// SubscribeMessagesFromPerson creates a subscription that streams messages sent BY
+// personEmail, scoped by rooms and an optional mentions filter (see matchFromPersonActivity).
+// personEmail is always the sender filter. When mentionsOnly is true, only messages that
+// mention the authenticated caller (or @all) are delivered, and the caller is resolved via
+// the People API.
+func (m *MercuryManager) SubscribeMessagesFromPerson(
+	ctx context.Context,
+	client *webex.WebexClient,
+	accessToken string,
+	personEmail string,
+	rooms []string,
+	mentionsOnly bool,
+) (*Subscription, error) {
+	personEmail = strings.ToLower(strings.TrimSpace(personEmail))
+	if personEmail == "" {
+		return nil, fmt.Errorf("personEmail is required")
+	}
+
+	tokHash := hashToken(accessToken)
+
+	// Resolve the caller only when matching mentions of "me".
+	var callerEmail, callerPersonID string
+	if mentionsOnly {
+		var err error
+		callerEmail, callerPersonID, err = resolveCaller(client)
+		if err != nil {
+			return nil, err
+		}
+		log.Printf("[Mercury] Resolved caller %s (personId %s) for from-person mention filter", callerEmail, callerPersonID)
+	}
+
+	uc, err := m.getOrCreateConnection(client, tokHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Mercury connection: %w", err)
+	}
+
+	roomSet := buildRoomSet(rooms)
+	normalizedRooms := make([]string, 0, len(roomSet))
+	for r := range roomSet {
+		normalizedRooms = append(normalizedRooms, r)
+	}
+
+	subID := fmt.Sprintf("fpsub_%x", sha256.Sum256([]byte(fmt.Sprintf("%s_%s_%d", tokHash, personEmail, time.Now().UnixNano()))))[:22]
+
+	sessionID := ""
+	if session := server.ClientSessionFromContext(ctx); session != nil {
+		sessionID = session.SessionID()
+	}
+
+	subCtx, cancel := context.WithCancel(context.Background())
+
+	sub := &Subscription{
+		ID:           subID,
+		Email:        personEmail,
+		PersonID:     callerPersonID,
+		Rooms:        normalizedRooms,
+		MentionsOnly: mentionsOnly,
+		TokenHash:    tokHash,
+		SessionID:    sessionID,
+		CreatedAt:    time.Now(),
+		cancel:       cancel,
+	}
+
+	m.mu.Lock()
+	m.subscriptions[subID] = sub
+	m.mu.Unlock()
+
+	for _, eventType := range []string{"post", "share"} {
+		et := eventType
+		handler := func(activity *conversation.Activity) {
+			select {
+			case <-subCtx.Done():
+				return
+			default:
+			}
+
+			if m.shouldIgnoreActivity(activity) {
+				log.Printf("[Mercury] Dropping ignored sender from-person activity: subscription=%s event=%s activity=%s sender=%s",
+					subID, et, activityID(activity), activity.Actor.EmailAddress)
+				return
+			}
+
+			content := m.getActivityContent(uc, activity)
+			matched, matchType := matchFromPersonActivity(activity, content, personEmail, roomSet, mentionsOnly, callerEmail, callerPersonID)
+			if !matched {
+				return
+			}
+
+			log.Printf("[Mercury] From-person subscription %s matched event: event=%s matchType=%s activity=%s session=%s",
+				subID, et, matchType, activityID(activity), sessionLabel(sessionID))
+			payload := m.buildMentionEventPayload(sub, et, "personEmail", activity, content)
+			payload["matchType"] = matchType
+			m.sendNotification(sessionID, payload)
+		}
+		uc.convClient.On(et, handler)
+		sub.handlers = append(sub.handlers, eventHandler{eventType: et, handler: handler})
+	}
+
+	// Ensure Mercury is connected
+	uc.mu.Lock()
+	if !uc.connected {
+		log.Printf("[Mercury] Connecting Mercury for user (hash=%s...)", tokHash[:8])
+		if err := uc.convClient.Connect(); err != nil {
+			uc.mu.Unlock()
+			m.Unsubscribe(subID)
+			return nil, fmt.Errorf("failed to connect Mercury: %w", err)
+		}
+		uc.connected = true
+		log.Printf("[Mercury] Connected successfully for user (hash=%s...)", tokHash[:8])
+	}
+	uc.mu.Unlock()
+
+	log.Printf("[Mercury] From-person subscription %s created: personEmail=%s rooms=%v mentionsOnly=%v session=%s",
+		subID, personEmail, normalizedRooms, mentionsOnly, sessionID)
 	return sub, nil
 }
 
@@ -578,24 +804,39 @@ func (m *MercuryManager) Unsubscribe(subscriptionID string) error {
 		}
 		sub.handlers = nil
 
-		uc.mu.Lock()
-		uc.refCount--
-		if uc.refCount <= 0 {
-			log.Printf("[Mercury] No more subscriptions for user (hash=%s...), disconnecting", sub.TokenHash[:8])
-			uc.convClient.Disconnect()
-			uc.connected = false
-			uc.mu.Unlock()
-
-			m.mu.Lock()
-			delete(m.userConns, sub.TokenHash)
-			m.mu.Unlock()
-		} else {
-			uc.mu.Unlock()
-		}
+		m.releaseConnection(sub.TokenHash)
 	}
 
 	log.Printf("[Mercury] Subscription %s cancelled", subscriptionID)
 	return nil
+}
+
+// releaseConnection decrements the refcount on a user's Mercury connection and,
+// when no subscriptions or waiters remain, disconnects and removes it. It is the
+// counterpart to the refCount++ in getOrCreateConnection; every getOrCreateConnection
+// must be paired with exactly one releaseConnection.
+func (m *MercuryManager) releaseConnection(tokHash string) {
+	m.mu.RLock()
+	uc, ok := m.userConns[tokHash]
+	m.mu.RUnlock()
+	if !ok {
+		return
+	}
+
+	uc.mu.Lock()
+	uc.refCount--
+	if uc.refCount <= 0 {
+		log.Printf("[Mercury] No more subscriptions for user (hash=%s...), disconnecting", tokHash[:8])
+		uc.convClient.Disconnect()
+		uc.connected = false
+		uc.mu.Unlock()
+
+		m.mu.Lock()
+		delete(m.userConns, tokHash)
+		m.mu.Unlock()
+	} else {
+		uc.mu.Unlock()
+	}
 }
 
 // UnsubscribeBySession cancels all subscriptions for a given MCP session.
@@ -614,6 +855,35 @@ func (m *MercuryManager) UnsubscribeBySession(sessionID string) {
 	}
 }
 
+// buildRoomSet normalizes a list of room IDs into a lookup set, dropping blanks.
+// Returns nil when no usable room IDs remain (the "empty rooms" branch).
+func buildRoomSet(rooms []string) map[string]bool {
+	set := make(map[string]bool, len(rooms))
+	for _, r := range rooms {
+		r = strings.TrimSpace(r)
+		if r != "" {
+			set[r] = true
+		}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	return set
+}
+
+// resolveCaller fetches the authenticated user (the token owner) so mention
+// matching can target "me". Returns lowercased email and person ID.
+func resolveCaller(client *webex.WebexClient) (email, personID string, err error) {
+	me, err := client.People().GetMe()
+	if err != nil {
+		return "", "", fmt.Errorf("failed to resolve authenticated user: %w", err)
+	}
+	if me == nil || len(me.Emails) == 0 {
+		return "", "", fmt.Errorf("authenticated user has no email address")
+	}
+	return strings.ToLower(strings.TrimSpace(me.Emails[0])), me.ID, nil
+}
+
 // WaitForMessage blocks until a message arrives in the specified room or timeout.
 func (m *MercuryManager) WaitForMessage(
 	ctx context.Context,
@@ -628,6 +898,7 @@ func (m *MercuryManager) WaitForMessage(
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Mercury connection: %w", err)
 	}
+	defer m.releaseConnection(tokHash)
 
 	resultCh := make(chan map[string]interface{}, 1)
 	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -689,6 +960,104 @@ func (m *MercuryManager) WaitForMessage(
 		return result, nil
 	case <-timeoutCtx.Done():
 		return nil, fmt.Errorf("timeout waiting for message after %v", timeout)
+	}
+}
+
+// WaitForMessageFromPerson blocks until a message sent BY personEmail arrives that
+// satisfies the room scope and optional mention filter (see matchFromPersonActivity),
+// or until timeout. personEmail is always the sender filter.
+func (m *MercuryManager) WaitForMessageFromPerson(
+	ctx context.Context,
+	client *webex.WebexClient,
+	accessToken string,
+	personEmail string,
+	rooms []string,
+	mentionsOnly bool,
+	timeout time.Duration,
+) (map[string]interface{}, error) {
+	personEmail = strings.ToLower(strings.TrimSpace(personEmail))
+	if personEmail == "" {
+		return nil, fmt.Errorf("personEmail is required")
+	}
+
+	tokHash := hashToken(accessToken)
+	uc, err := m.getOrCreateConnection(client, tokHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Mercury connection: %w", err)
+	}
+	defer m.releaseConnection(tokHash)
+
+	roomSet := buildRoomSet(rooms)
+
+	// Resolve the caller only when we need to match mentions of "me".
+	var callerEmail, callerPersonID string
+	if mentionsOnly {
+		callerEmail, callerPersonID, err = resolveCaller(client)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	resultCh := make(chan map[string]interface{}, 1)
+	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	handler := func(activity *conversation.Activity) {
+		if m.shouldIgnoreActivity(activity) {
+			return
+		}
+
+		content := m.getActivityContent(uc, activity)
+		matched, matchType := matchFromPersonActivity(activity, content, personEmail, roomSet, mentionsOnly, callerEmail, callerPersonID)
+		if !matched {
+			return
+		}
+
+		payload := map[string]interface{}{
+			"type":        activity.Verb,
+			"matchType":   matchType,
+			"content":     content,
+			"roomId":      "",
+			"sender":      "",
+			"personEmail": personEmail,
+			"timestamp":   activity.Published,
+		}
+		if activity.Target != nil {
+			payload["roomId"] = activity.Target.ID
+			payload["roomGlobalId"] = activity.Target.GlobalID
+		}
+		if activity.Actor != nil {
+			payload["sender"] = activity.Actor.DisplayName
+			payload["senderEmail"] = activity.Actor.EmailAddress
+		}
+
+		select {
+		case resultCh <- payload:
+		default:
+		}
+	}
+
+	uc.convClient.On("post", handler)
+	uc.convClient.On("share", handler)
+	defer uc.convClient.Off("post", handler)
+	defer uc.convClient.Off("share", handler)
+
+	// Ensure connected
+	uc.mu.Lock()
+	if !uc.connected {
+		if err := uc.convClient.Connect(); err != nil {
+			uc.mu.Unlock()
+			return nil, fmt.Errorf("failed to connect Mercury: %w", err)
+		}
+		uc.connected = true
+	}
+	uc.mu.Unlock()
+
+	select {
+	case result := <-resultCh:
+		return result, nil
+	case <-timeoutCtx.Done():
+		return nil, fmt.Errorf("timeout waiting for message from %s after %v", personEmail, timeout)
 	}
 }
 

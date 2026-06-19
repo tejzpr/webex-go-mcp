@@ -424,8 +424,12 @@ Add to your Cursor MCP configuration (`.cursor/mcp.json` in your project or `~/.
 ### Streaming
 
 - **`webex_subscribe_room_messages`** -- Subscribe to real-time messages in a room
+- **`webex_subscribe_mentions`** -- Subscribe to messages that @mention an email or are sent as direct (1:1) messages to that user
+- **`webex_subscribe_direct_messages`** -- Subscribe to 1:1 direct-message conversations for a user
+- **`webex_subscribe_messages_from_person`** -- Subscribe to messages sent **by** a person (`personEmail`), optionally scoped to `rooms`, with `mentionsOnly` to require a mention of you or `@all`
 - **`webex_unsubscribe`** -- Unsubscribe from a subscription
-- **`webex_wait_for_message`** -- Wait for the next message on a subscription
+- **`webex_wait_for_message`** -- Wait (blocking, one-shot) for the next message in a room
+- **`webex_wait_for_message_in_room_from_person`** -- Wait (blocking, one-shot) for the next message sent **by** a person (`personEmail`), with the same `rooms` / `mentionsOnly` scoping
 - **`webex_list_subscriptions`** -- List active subscriptions
 
 ### Webhooks

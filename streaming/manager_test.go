@@ -285,3 +285,189 @@ func TestHashToken_DifferentInputsDifferentOutputs(t *testing.T) {
 		t.Errorf("hashToken should produce different hashes for different inputs")
 	}
 }
+
+func TestMatchFromPersonActivity(t *testing.T) {
+	const (
+		sender   = "sender@example.com"
+		caller   = "me@example.com"
+		callerID = "ME123"
+	)
+
+	// activity builds an activity from a sender, room tags, room IDs, and participant count.
+	activity := func(senderEmail string, tags []string, roomID, globalID string, participants int) *conversation.Activity {
+		a := &conversation.Activity{
+			Actor: &conversation.Actor{EmailAddress: senderEmail},
+		}
+		if tags != nil || roomID != "" || globalID != "" || participants > 0 {
+			a.Target = &conversation.Target{ID: roomID, GlobalID: globalID, Tags: tags}
+			if participants > 0 {
+				items := make([]interface{}, participants)
+				a.Target.Participants = &conversation.Participants{Items: items}
+			}
+		}
+		return a
+	}
+	roomSet := func(ids ...string) map[string]bool {
+		s := make(map[string]bool, len(ids))
+		for _, id := range ids {
+			s[id] = true
+		}
+		return s
+	}
+
+	cases := []struct {
+		name         string
+		activity     *conversation.Activity
+		content      string
+		roomSet      map[string]bool
+		mentionsOnly bool
+		wantMatched  bool
+		wantType     string
+	}{
+		{
+			name:        "wrong sender rejected",
+			activity:    activity("other@example.com", []string{"ONE_ON_ONE"}, "", "", 0),
+			wantMatched: false,
+		},
+		{
+			name:        "empty rooms direct message",
+			activity:    activity(sender, []string{"ONE_ON_ONE"}, "", "", 0),
+			wantMatched: true,
+			wantType:    "from_person_direct",
+		},
+		{
+			name:        "empty rooms group rejected",
+			activity:    activity(sender, []string{"GROUP"}, "room1", "", 0),
+			wantMatched: false,
+		},
+		{
+			name:        "listed room by ID",
+			activity:    activity(sender, []string{"GROUP"}, "room1", "", 0),
+			roomSet:     roomSet("room1"),
+			wantMatched: true,
+			wantType:    "from_person",
+		},
+		{
+			name:        "listed room by GlobalID",
+			activity:    activity(sender, []string{"GROUP"}, "localid", "globalid1", 0),
+			roomSet:     roomSet("globalid1"),
+			wantMatched: true,
+			wantType:    "from_person",
+		},
+		{
+			name:        "room not in set rejected",
+			activity:    activity(sender, []string{"GROUP"}, "room2", "", 0),
+			roomSet:     roomSet("room1"),
+			wantMatched: false,
+		},
+		{
+			name:         "empty rooms mentionsOnly mentions caller email",
+			activity:     activity(sender, []string{"GROUP"}, "room9", "", 0),
+			content:      "hey <@personEmail:me@example.com|Me> look",
+			mentionsOnly: true,
+			wantMatched:  true,
+			wantType:     "from_person_mention",
+		},
+		{
+			name:         "mentionsOnly caller email without alias",
+			activity:     activity(sender, []string{"GROUP"}, "room9", "", 0),
+			content:      "hey <@personEmail:me@example.com> look",
+			mentionsOnly: true,
+			wantMatched:  true,
+			wantType:     "from_person_mention",
+		},
+		{
+			name:         "mentionsOnly prefix-collision email rejected",
+			activity:     activity(sender, []string{"GROUP"}, "room9", "", 0),
+			content:      "hey <@personEmail:me@example.com.evil.com|Imposter>",
+			mentionsOnly: true,
+			wantMatched:  false,
+		},
+		{
+			name:         "empty rooms mentionsOnly mentions caller by ID",
+			activity:     activity(sender, []string{"GROUP"}, "room9", "", 0),
+			content:      "ping <@personId:ME123|Me>",
+			mentionsOnly: true,
+			wantMatched:  true,
+			wantType:     "from_person_mention",
+		},
+		{
+			name:         "empty rooms mentionsOnly mention all",
+			activity:     activity(sender, []string{"GROUP"}, "room9", "", 0),
+			content:      "announcement <@all>",
+			mentionsOnly: true,
+			wantMatched:  true,
+			wantType:     "from_person_mention_all",
+		},
+		{
+			name:         "mentionsOnly third-party mention rejected",
+			activity:     activity(sender, []string{"GROUP"}, "room9", "", 0),
+			content:      "hey <@personEmail:bob@example.com|Bob>",
+			mentionsOnly: true,
+			wantMatched:  false,
+		},
+		{
+			name:         "listed room mentionsOnly mentions caller",
+			activity:     activity(sender, []string{"GROUP"}, "room1", "", 0),
+			content:      "<@personEmail:me@example.com|Me> hi",
+			roomSet:      roomSet("room1"),
+			mentionsOnly: true,
+			wantMatched:  true,
+			wantType:     "from_person_mention",
+		},
+		{
+			name:         "listed room mentionsOnly no mention rejected",
+			activity:     activity(sender, []string{"GROUP"}, "room1", "", 0),
+			content:      "just a normal message",
+			roomSet:      roomSet("room1"),
+			mentionsOnly: true,
+			wantMatched:  false,
+		},
+		{
+			name:        "case-insensitive sender and mention",
+			activity:    activity("SENDER@EXAMPLE.COM", []string{"GROUP"}, "room1", "", 0),
+			content:     "HEY <@PERSONEMAIL:ME@EXAMPLE.COM|Me>",
+			roomSet:     roomSet("room1"),
+			wantMatched: true,
+			wantType:    "from_person",
+		},
+		{
+			name:         "mentionsOnly mixed-case mention markup matches",
+			activity:     activity(sender, []string{"GROUP"}, "room1", "", 0),
+			content:      "HEY <@PersonEmail:Me@Example.com> there",
+			roomSet:      roomSet("room1"),
+			mentionsOnly: true,
+			wantMatched:  true,
+			wantType:     "from_person_mention",
+		},
+		{
+			name:        "nil actor rejected",
+			activity:    &conversation.Activity{Target: &conversation.Target{Tags: []string{"ONE_ON_ONE"}}},
+			wantMatched: false,
+		},
+		{
+			name:        "nil target with non-empty roomSet rejected",
+			activity:    &conversation.Activity{Actor: &conversation.Actor{EmailAddress: sender}},
+			roomSet:     roomSet("room1"),
+			wantMatched: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			callerEmail, callerPersonID := "", ""
+			if tc.mentionsOnly {
+				callerEmail, callerPersonID = caller, callerID
+			}
+			matched, matchType := matchFromPersonActivity(
+				tc.activity, tc.content, sender, tc.roomSet, tc.mentionsOnly, callerEmail, callerPersonID,
+			)
+			if matched != tc.wantMatched {
+				t.Fatalf("matched = %v, want %v (matchType=%q)", matched, tc.wantMatched, matchType)
+			}
+			if matched && matchType != tc.wantType {
+				t.Fatalf("matchType = %q, want %q", matchType, tc.wantType)
+			}
+		})
+	}
+}

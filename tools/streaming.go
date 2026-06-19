@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	webex "github.com/WebexCommunity/webex-go-sdk/v2"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/tejzpr/webex-go-mcp/auth"
@@ -44,11 +45,8 @@ func RegisterStreamingTools(s ToolRegistrar, resolver auth.ClientResolver, manag
 			eventTypes := parseCSV(eventTypesStr)
 
 			// Get the access token from context (HTTP mode) or from the client (STDIO mode)
-			accessToken, ok := auth.WebexTokenFromContext(ctx)
-			if !ok || accessToken == "" {
-				accessToken = client.Core().GetAccessToken()
-			}
-			if accessToken == "" {
+			accessToken, ok := accessTokenFromCtxOrClient(ctx, client)
+			if !ok {
 				return mcp.NewToolResultError("No access token available for Mercury connection."), nil
 			}
 
@@ -100,11 +98,8 @@ func RegisterStreamingTools(s ToolRegistrar, resolver auth.ClientResolver, manag
 			includeDirect := req.GetBool("includeDirect", true)
 
 			// Get the access token from context (HTTP mode) or from the client (STDIO mode)
-			accessToken, ok := auth.WebexTokenFromContext(ctx)
-			if !ok || accessToken == "" {
-				accessToken = client.Core().GetAccessToken()
-			}
-			if accessToken == "" {
+			accessToken, ok := accessTokenFromCtxOrClient(ctx, client)
+			if !ok {
 				return mcp.NewToolResultError("No access token available for Mercury connection."), nil
 			}
 
@@ -152,11 +147,8 @@ func RegisterStreamingTools(s ToolRegistrar, resolver auth.ClientResolver, manag
 			}
 
 			// Get the access token from context (HTTP mode) or from the client (STDIO mode)
-			accessToken, ok := auth.WebexTokenFromContext(ctx)
-			if !ok || accessToken == "" {
-				accessToken = client.Core().GetAccessToken()
-			}
-			if accessToken == "" {
+			accessToken, ok := accessTokenFromCtxOrClient(ctx, client)
+			if !ok {
 				return mcp.NewToolResultError("No access token available for Mercury connection."), nil
 			}
 
@@ -237,15 +229,127 @@ func RegisterStreamingTools(s ToolRegistrar, resolver auth.ClientResolver, manag
 			timeout := time.Duration(timeoutSec) * time.Second
 
 			// Get the access token from context (HTTP mode) or from the client (STDIO mode)
-			accessToken, ok := auth.WebexTokenFromContext(ctx)
-			if !ok || accessToken == "" {
-				accessToken = client.Core().GetAccessToken()
-			}
-			if accessToken == "" {
+			accessToken, ok := accessTokenFromCtxOrClient(ctx, client)
+			if !ok {
 				return mcp.NewToolResultError("No access token available for Mercury connection."), nil
 			}
 
 			msg, err := manager.WaitForMessage(ctx, client, accessToken, roomID, timeout)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Error waiting for message: %v", err)), nil
+			}
+
+			data, _ := json.MarshalIndent(msg, "", "  ")
+			return mcp.NewToolResultText(string(data)), nil
+		},
+	)
+
+	// subscribe_messages_from_person — streams messages sent BY a given person, scoped by rooms + mentions
+	s.AddTool(
+		mcp.NewTool("webex_subscribe_messages_from_person",
+			mcp.WithDescription("Subscribe to real-time messages SENT BY a specific person (by email), with optional room scoping and a mentions filter. "+
+				"personEmail is always the sender. Behavior by parameters:\n"+
+				"- rooms empty, mentionsOnly false: direct (1:1) messages from the person.\n"+
+				"- rooms empty, mentionsOnly true: messages from the person in ANY room that mention you (the authenticated user) or @all.\n"+
+				"- rooms set, mentionsOnly false: messages from the person in any of those rooms.\n"+
+				"- rooms set, mentionsOnly true: messages from the person in those rooms that mention you or @all.\n\n"+
+				"Matching events are streamed as MCP notifications with matchType='from_person', 'from_person_direct', 'from_person_mention', or 'from_person_mention_all'. "+
+				"Use webex_unsubscribe to stop. Requires HTTP mode with OAuth authentication."),
+			mcp.WithString("personEmail",
+				mcp.Required(),
+				mcp.Description("The email address of the sender to listen for.")),
+			mcp.WithArray("rooms",
+				mcp.WithStringItems(),
+				mcp.Description("Room IDs to scope to. If empty, listens to direct (1:1) messages only — unless mentionsOnly is true, in which case it listens across all rooms.")),
+			mcp.WithBoolean("mentionsOnly",
+				mcp.Description("When true, only deliver messages that mention you (the authenticated user) or @all. Default: false.")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
+			personEmail := req.GetString("personEmail", "")
+			if personEmail == "" {
+				return mcp.NewToolResultError("personEmail is required"), nil
+			}
+			rooms := req.GetStringSlice("rooms", nil)
+			mentionsOnly := req.GetBool("mentionsOnly", false)
+
+			accessToken, ok := accessTokenFromCtxOrClient(ctx, client)
+			if !ok {
+				return mcp.NewToolResultError("No access token available for Mercury connection."), nil
+			}
+
+			sub, err := manager.SubscribeMessagesFromPerson(ctx, client, accessToken, personEmail, rooms, mentionsOnly)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to subscribe: %v", err)), nil
+			}
+
+			result := map[string]interface{}{
+				"subscriptionId": sub.ID,
+				"personEmail":    sub.Email,
+				"rooms":          sub.Rooms,
+				"mentionsOnly":   sub.MentionsOnly,
+				"status":         "listening",
+				"message":        "From-person subscription active. Events will be streamed as MCP notifications. Use webex_unsubscribe to stop.",
+			}
+			data, _ := json.MarshalIndent(result, "", "  ")
+			return mcp.NewToolResultText(string(data)), nil
+		},
+	)
+
+	// wait_for_message_in_room_from_person — blocks until a message from a given person arrives or timeout
+	s.AddTool(
+		mcp.NewTool("webex_wait_for_message_in_room_from_person",
+			mcp.WithDescription("Wait for the next message SENT BY a specific person (by email), with optional room scoping and a mentions filter. "+
+				"Blocks until a matching message arrives or timeout. One-shot alternative to webex_subscribe_messages_from_person. "+
+				"personEmail is always the sender. Behavior by parameters:\n"+
+				"- rooms empty, mentionsOnly false: direct (1:1) messages from the person.\n"+
+				"- rooms empty, mentionsOnly true: messages from the person in ANY room that mention you (the authenticated user) or @all.\n"+
+				"- rooms set, mentionsOnly false: messages from the person in any of those rooms.\n"+
+				"- rooms set, mentionsOnly true: messages from the person in those rooms that mention you or @all.\n\n"+
+				"Requires HTTP mode with OAuth authentication."),
+			mcp.WithString("personEmail",
+				mcp.Required(),
+				mcp.Description("The email address of the sender to wait for.")),
+			mcp.WithArray("rooms",
+				mcp.WithStringItems(),
+				mcp.Description("Room IDs to scope to. If empty, waits for direct (1:1) messages only — unless mentionsOnly is true, in which case it waits across all rooms.")),
+			mcp.WithBoolean("mentionsOnly",
+				mcp.Description("When true, only match messages that mention you (the authenticated user) or @all. Default: false.")),
+			mcp.WithNumber("timeoutSeconds",
+				mcp.Description("Maximum time to wait in seconds. Default: 60. Max: 300.")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			client, err := resolver(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Auth error: %v", err)), nil
+			}
+
+			personEmail := req.GetString("personEmail", "")
+			if personEmail == "" {
+				return mcp.NewToolResultError("personEmail is required"), nil
+			}
+			rooms := req.GetStringSlice("rooms", nil)
+			mentionsOnly := req.GetBool("mentionsOnly", false)
+
+			timeoutSec := req.GetInt("timeoutSeconds", 60)
+			if timeoutSec > 300 {
+				timeoutSec = 300
+			}
+			if timeoutSec < 1 {
+				timeoutSec = 1
+			}
+			timeout := time.Duration(timeoutSec) * time.Second
+
+			accessToken, ok := accessTokenFromCtxOrClient(ctx, client)
+			if !ok {
+				return mcp.NewToolResultError("No access token available for Mercury connection."), nil
+			}
+
+			msg, err := manager.WaitForMessageFromPerson(ctx, client, accessToken, personEmail, rooms, mentionsOnly, timeout)
 			if err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("Error waiting for message: %v", err)), nil
 			}
@@ -275,7 +379,12 @@ func RegisterStreamingTools(s ToolRegistrar, resolver auth.ClientResolver, manag
 					"subscriptionId": sub.ID,
 					"createdAt":      sub.CreatedAt.Format(time.RFC3339),
 				}
-				if strings.HasPrefix(sub.ID, "dmsub_") {
+				if strings.HasPrefix(sub.ID, "fpsub_") {
+					item["type"] = "from_person"
+					item["personEmail"] = sub.Email
+					item["rooms"] = sub.Rooms
+					item["mentionsOnly"] = sub.MentionsOnly
+				} else if strings.HasPrefix(sub.ID, "dmsub_") {
 					item["type"] = "direct_messages"
 					item["email"] = sub.Email
 				} else if sub.Email != "" {
@@ -297,6 +406,20 @@ func RegisterStreamingTools(s ToolRegistrar, resolver auth.ClientResolver, manag
 			return mcp.NewToolResultText(string(data)), nil
 		},
 	)
+}
+
+// accessTokenFromCtxOrClient returns the Webex access token for a Mercury
+// connection: the per-request token from context (HTTP mode), falling back to
+// the client's configured token (STDIO mode). The bool is false when neither
+// yields a non-empty token.
+func accessTokenFromCtxOrClient(ctx context.Context, client *webex.WebexClient) (string, bool) {
+	if token, ok := auth.WebexTokenFromContext(ctx); ok && token != "" {
+		return token, true
+	}
+	if token := client.Core().GetAccessToken(); token != "" {
+		return token, true
+	}
+	return "", false
 }
 
 // parseCSV splits a comma-separated string into trimmed non-empty parts.
