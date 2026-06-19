@@ -22,7 +22,7 @@ A Go-based [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) serv
 | **Meetings** | 8 | List, create, get, update, patch, delete meetings; list participants, get participant |
 | **Transcripts** | 5 | List transcripts, download content, list/get/update snippets |
 | **Recordings** | 3 | List, get, download recordings |
-| **Streaming** | 4 | Subscribe, unsubscribe, wait_for_message, list_subscriptions |
+| **Streaming** | 8 | Subscribe (room, mentions, direct, from-person), unsubscribe, wait_for_message, wait_for_message_in_room_from_person, list_subscriptions |
 | **Webhooks** | 5 | List, create, get, update, delete webhooks |
 
 ## Prerequisites
@@ -107,7 +107,7 @@ When `WEBEX_ENABLE_MCP_ELICITATION=true`, tools that send, create, update, patch
 | `meetings` | `list`, `create`, `get`, `update`, `patch`, `delete`, `list_participants`, `get_participant` |
 | `transcripts` | `list`, `download`, `list_snippets`, `get_snippet`, `update_snippet` |
 | `recordings` | `list`, `get`, `download` |
-| `streaming` | `subscribe_room_messages`, `unsubscribe`, `wait_for_message`, `list_subscriptions` |
+| `streaming` | `subscribe_room_messages`, `subscribe_mentions`, `subscribe_direct_messages`, `subscribe_messages_from_person`, `unsubscribe`, `wait_for_message`, `wait_for_message_in_room_from_person`, `list_subscriptions` |
 | `webhooks` | `list`, `create`, `get`, `update`, `delete` |
 
 #### Preset Flags
