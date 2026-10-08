@@ -13,7 +13,9 @@ import (
 	"time"
 )
 
-const (
+// Webex OAuth endpoints. Declared as variables so tests can point them at a
+// local fake server.
+var (
 	webexAuthorizeURL   = "https://webexapis.com/v1/authorize"
 	webexAccessTokenURL = "https://webexapis.com/v1/access_token"
 )
@@ -116,17 +118,7 @@ func (oh *OAuthHandler) HandleAuthorize(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Build Webex authorization URL
-	webexParams := url.Values{
-		"response_type":         {"code"},
-		"client_id":             {oh.config.ClientID},
-		"redirect_uri":          {oh.config.RedirectURI},
-		"scope":                 {oh.config.Scopes},
-		"state":                 {internalState},
-		"code_challenge":        {webexCodeChallenge},
-		"code_challenge_method": {"S256"},
-	}
-
-	webexAuthURL := webexAuthorizeURL + "?" + webexParams.Encode()
+	webexAuthURL := BuildWebexAuthorizeURL(oh.config, internalState, webexCodeChallenge)
 	log.Printf("[OAuth] /authorize: redirecting to Webex (state=%s)", internalState)
 	http.Redirect(w, r, webexAuthURL, http.StatusFound)
 }
@@ -392,48 +384,60 @@ func (oh *OAuthHandler) handleRefreshToken(w http.ResponseWriter, r *http.Reques
 
 // exchangeWebexCode exchanges a Webex authorization code for tokens.
 func (oh *OAuthHandler) exchangeWebexCode(code, codeVerifier string) (*WebexTokenResponse, error) {
-	data := url.Values{
-		"grant_type":    {"authorization_code"},
-		"code":          {code},
-		"redirect_uri":  {oh.config.RedirectURI},
-		"client_id":     {oh.config.ClientID},
-		"client_secret": {oh.config.ClientSecret},
-		"code_verifier": {codeVerifier},
-	}
-
-	resp, err := http.PostForm(webexAccessTokenURL, data)
-	if err != nil {
-		return nil, fmt.Errorf("HTTP request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Webex token exchange failed (status %d): %s", resp.StatusCode, string(body))
-	}
-
-	var tokenResp WebexTokenResponse
-	if err := json.Unmarshal(body, &tokenResp); err != nil {
-		return nil, fmt.Errorf("failed to parse token response: %w", err)
-	}
-
-	return &tokenResp, nil
+	return ExchangeWebexCode(oh.config, code, codeVerifier)
 }
 
 // refreshWebexToken uses a Webex refresh token to get new access/refresh tokens.
 func (oh *OAuthHandler) refreshWebexToken(refreshToken string) (*WebexTokenResponse, error) {
+	return RefreshWebexToken(oh.config, refreshToken)
+}
+
+// ExchangeWebexCode exchanges a Webex authorization code (obtained with the
+// given PKCE code verifier) for Webex access and refresh tokens.
+func ExchangeWebexCode(cfg *OAuthConfig, code, codeVerifier string) (*WebexTokenResponse, error) {
+	data := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {cfg.RedirectURI},
+		"client_id":     {cfg.ClientID},
+		"client_secret": {cfg.ClientSecret},
+	}
+	if codeVerifier != "" {
+		data.Set("code_verifier", codeVerifier)
+	}
+	return postWebexTokenRequest(data, "token exchange")
+}
+
+// RefreshWebexToken uses a Webex refresh token to obtain new access/refresh tokens.
+func RefreshWebexToken(cfg *OAuthConfig, refreshToken string) (*WebexTokenResponse, error) {
 	data := url.Values{
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {refreshToken},
-		"client_id":     {oh.config.ClientID},
-		"client_secret": {oh.config.ClientSecret},
+		"client_id":     {cfg.ClientID},
+		"client_secret": {cfg.ClientSecret},
 	}
+	return postWebexTokenRequest(data, "token refresh")
+}
 
-	resp, err := http.PostForm(webexAccessTokenURL, data)
+// BuildWebexAuthorizeURL builds the Webex /authorize URL for the given state
+// and PKCE S256 code challenge.
+func BuildWebexAuthorizeURL(cfg *OAuthConfig, state, codeChallenge string) string {
+	params := url.Values{
+		"response_type":         {"code"},
+		"client_id":             {cfg.ClientID},
+		"redirect_uri":          {cfg.RedirectURI},
+		"scope":                 {cfg.Scopes},
+		"state":                 {state},
+		"code_challenge":        {codeChallenge},
+		"code_challenge_method": {"S256"},
+	}
+	return webexAuthorizeURL + "?" + params.Encode()
+}
+
+var webexTokenHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
+func postWebexTokenRequest(data url.Values, op string) (*WebexTokenResponse, error) {
+	resp, err := webexTokenHTTPClient.PostForm(webexAccessTokenURL, data)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
@@ -445,12 +449,15 @@ func (oh *OAuthHandler) refreshWebexToken(refreshToken string) (*WebexTokenRespo
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Webex token refresh failed (status %d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("Webex %s failed (status %d): %s", op, resp.StatusCode, string(body))
 	}
 
 	var tokenResp WebexTokenResponse
 	if err := json.Unmarshal(body, &tokenResp); err != nil {
 		return nil, fmt.Errorf("failed to parse token response: %w", err)
+	}
+	if tokenResp.AccessToken == "" {
+		return nil, fmt.Errorf("Webex %s returned no access_token", op)
 	}
 
 	return &tokenResp, nil

@@ -12,6 +12,7 @@ import (
 	"github.com/WebexCommunity/webex-go-sdk/v2/webexsdk"
 	"github.com/tejzpr/webex-go-mcp/auth"
 	"github.com/tejzpr/webex-go-mcp/streaming"
+	"github.com/tejzpr/webex-go-mcp/tools"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -30,58 +31,66 @@ func main() {
 	}
 
 	// Define flags
-	rootCmd.Flags().String("mode", "stdio", "Server mode: 'stdio' (default) or 'http' (env: WEBEX_MODE)")
-	rootCmd.Flags().String("access-token", "", "Webex API access token (env: WEBEX_ACCESS_TOKEN). Required for stdio mode; used for static-token http mode or bot sends in hybrid http mode.")
-	rootCmd.Flags().String("webex-api-base-url", "https://webexapis.com/v1", "Webex API base URL (env: WEBEX_API_BASE_URL)")
-	rootCmd.Flags().Duration("timeout", 30*time.Second, "HTTP request timeout (env: WEBEX_TIMEOUT)")
-	rootCmd.Flags().String("include", "", "Comma-separated list of tools to include (category:action format, e.g. messages:list,meetings:create). Only these tools will be registered. (env: WEBEX_INCLUDE_TOOLS)")
-	rootCmd.Flags().String("exclude", "", "Comma-separated list of tools to exclude (category:action format, e.g. messages:delete,rooms:delete). All tools except these will be registered. (env: WEBEX_EXCLUDE_TOOLS)")
-	rootCmd.Flags().Bool("minimal", false, "Enable a minimal tool set: messages, rooms, teams, meetings, and transcripts. Adds to --include. (env: WEBEX_MINIMAL)")
-	rootCmd.Flags().Bool("readonly-minimal", false, "Enable a readonly minimal tool set: only read/list/get operations for messages, rooms, teams, meetings, and transcripts. Adds to --include. (env: WEBEX_READONLY_MINIMAL)")
-	rootCmd.Flags().Bool("shared-env-minimal", false, "Enable a shared-environment-safe minimal tool set: person lookup and outbound message tools only. Adds to --include. (env: WEBEX_SHARED_ENV_MINIMAL)")
-	rootCmd.Flags().Bool("enable-mcp-elicitation", false, "Require MCP elicitation approval before mutating Webex tools run. Fails closed when the client does not support elicitation. (env: WEBEX_ENABLE_MCP_ELICITATION)")
-	rootCmd.Flags().String("streaming-ignore-from-emails", "", "Comma-separated sender email addresses to drop from Mercury streaming notifications. Use this to suppress messages sent by the bot itself. (env: WEBEX_STREAMING_IGNORE_FROM_EMAILS)")
+	rootCmd.PersistentFlags().String("mode", "stdio", "Server mode: 'stdio' (default) or 'http' (env: WEBEX_MODE)")
+	rootCmd.PersistentFlags().String("access-token", "", "Webex API access token (env: WEBEX_ACCESS_TOKEN). Used for static-token stdio/http mode, or for bot sends in hybrid mode when a Webex Integration is also configured.")
+	rootCmd.PersistentFlags().String("webex-api-base-url", "https://webexapis.com/v1", "Webex API base URL (env: WEBEX_API_BASE_URL)")
+	rootCmd.PersistentFlags().Duration("timeout", 30*time.Second, "HTTP request timeout (env: WEBEX_TIMEOUT)")
+	rootCmd.PersistentFlags().String("include", "", "Comma-separated list of tools to include (category:action format, e.g. messages:list,meetings:create). Only these tools will be registered. (env: WEBEX_INCLUDE_TOOLS)")
+	rootCmd.PersistentFlags().String("exclude", "", "Comma-separated list of tools to exclude (category:action format, e.g. messages:delete,rooms:delete). All tools except these will be registered. (env: WEBEX_EXCLUDE_TOOLS)")
+	rootCmd.PersistentFlags().Bool("minimal", false, "Enable a minimal tool set: messages, rooms, teams, meetings, and transcripts. Adds to --include. (env: WEBEX_MINIMAL)")
+	rootCmd.PersistentFlags().Bool("readonly-minimal", false, "Enable a readonly minimal tool set: only read/list/get operations for messages, rooms, teams, meetings, and transcripts. Adds to --include. (env: WEBEX_READONLY_MINIMAL)")
+	rootCmd.PersistentFlags().Bool("shared-env-minimal", false, "Enable a shared-environment-safe minimal tool set: person lookup and outbound message tools only. Adds to --include. (env: WEBEX_SHARED_ENV_MINIMAL)")
+	rootCmd.PersistentFlags().Bool("enable-mcp-elicitation", false, "Require MCP elicitation approval before mutating Webex tools run. Fails closed when the client does not support elicitation. (env: WEBEX_ENABLE_MCP_ELICITATION)")
+	rootCmd.PersistentFlags().String("streaming-ignore-from-emails", "", "Comma-separated sender email addresses to drop from Mercury streaming notifications. Use this to suppress messages sent by the bot itself. (env: WEBEX_STREAMING_IGNORE_FROM_EMAILS)")
 
 	// HTTP mode flags
-	rootCmd.Flags().String("host", "localhost", "HTTP server bind host (env: WEBEX_HOST)")
-	rootCmd.Flags().Int("port", 8080, "HTTP server port (env: WEBEX_PORT)")
-	rootCmd.Flags().String("client-id", "", "Webex Integration Client ID (env: WEBEX_CLIENT_ID). Required for OAuth http mode.")
-	rootCmd.Flags().String("client-secret", "", "Webex Integration Client Secret (env: WEBEX_CLIENT_SECRET). Required for OAuth http mode.")
-	rootCmd.Flags().String("oauth-scopes", "spark:all", "Webex OAuth scopes (space-separated) (env: WEBEX_OAUTH_SCOPES)")
-	rootCmd.Flags().String("redirect-uri", "", "OAuth redirect URI registered with Webex (env: WEBEX_REDIRECT_URI). Required for OAuth http mode.")
-	rootCmd.Flags().String("base-url", "", "External base URL of this MCP server (env: WEBEX_BASE_URL). Required for http mode. Example: http://localhost:8080")
-	rootCmd.Flags().String("auth-api-key", "", "Optional API key required on HTTP MCP requests via X-API-Key (env: WEBEX_AUTH_API_KEY)")
-	rootCmd.Flags().String("tls-cert", "", "Path to TLS certificate file (env: WEBEX_TLS_CERT)")
-	rootCmd.Flags().String("tls-key", "", "Path to TLS key file (env: WEBEX_TLS_KEY)")
-	rootCmd.Flags().String("store", "memory", "Store backend: 'memory' (default), 'sqlite', or 'postgres' (env: WEBEX_STORE)")
-	rootCmd.Flags().String("store-dsn", "", "Store DSN for sqlite/postgres (env: WEBEX_STORE_DSN). SQLite: 'file:data.db', Postgres: 'postgres://user:pass@host:5432/db'")
-	rootCmd.Flags().String("cors-origins", "*", "Comma-separated list of allowed CORS origins (env: WEBEX_CORS_ORIGINS). Default '*' allows all.")
+	rootCmd.PersistentFlags().String("host", "localhost", "HTTP server bind host (env: WEBEX_HOST)")
+	rootCmd.PersistentFlags().Int("port", 8080, "HTTP server port (env: WEBEX_PORT)")
+	rootCmd.PersistentFlags().String("client-id", "", "Webex Integration Client ID (env: WEBEX_CLIENT_ID). Enables OAuth in http mode and browser sign-in in stdio mode.")
+	rootCmd.PersistentFlags().String("client-secret", "", "Webex Integration Client Secret (env: WEBEX_CLIENT_SECRET). Required with --client-id.")
+	rootCmd.PersistentFlags().String("oauth-scopes", "spark:all", "Webex OAuth scopes (space-separated) (env: WEBEX_OAUTH_SCOPES)")
+	rootCmd.PersistentFlags().String("redirect-uri", "", "OAuth redirect URI registered with Webex (env: WEBEX_REDIRECT_URI). Required for OAuth http mode. In stdio mode it must be a loopback URL and defaults to "+auth.DefaultLocalRedirectURI+".")
+	rootCmd.PersistentFlags().String("base-url", "", "External base URL of this MCP server (env: WEBEX_BASE_URL). Required for http mode. Example: http://localhost:8080")
+	rootCmd.PersistentFlags().String("auth-api-key", "", "Optional API key required on HTTP MCP requests via X-API-Key (env: WEBEX_AUTH_API_KEY)")
+	rootCmd.PersistentFlags().String("tls-cert", "", "Path to TLS certificate file (env: WEBEX_TLS_CERT)")
+	rootCmd.PersistentFlags().String("tls-key", "", "Path to TLS key file (env: WEBEX_TLS_KEY)")
+	rootCmd.PersistentFlags().String("store", "memory", "Store backend: 'memory' (default), 'sqlite', or 'postgres' (env: WEBEX_STORE)")
+	rootCmd.PersistentFlags().String("store-dsn", "", "Store DSN for sqlite/postgres (env: WEBEX_STORE_DSN). SQLite: 'file:data.db', Postgres: 'postgres://user:pass@host:5432/db'")
+	// STDIO OAuth (Webex Integration) flags
+	rootCmd.PersistentFlags().String("token-file", "", "Path of the stdio-mode OAuth token file (env: WEBEX_TOKEN_FILE). Default: <user config dir>/webex-go-mcp/oauth-token.json")
+	rootCmd.PersistentFlags().Bool("oauth-no-browser", false, "In stdio OAuth mode, do not open a browser automatically; only print/return the sign-in URL (env: WEBEX_OAUTH_NO_BROWSER)")
+	rootCmd.PersistentFlags().Duration("oauth-login-wait", 60*time.Second, "In stdio OAuth mode, how long a tool call waits for an interactive browser sign-in before returning the sign-in URL. Negative disables waiting. (env: WEBEX_OAUTH_LOGIN_WAIT)")
+
+	rootCmd.PersistentFlags().String("cors-origins", "*", "Comma-separated list of allowed CORS origins (env: WEBEX_CORS_ORIGINS). Default '*' allows all.")
 
 	// Bind flags to viper
-	_ = viper.BindPFlag("mode", rootCmd.Flags().Lookup("mode"))
-	_ = viper.BindPFlag("access_token", rootCmd.Flags().Lookup("access-token"))
-	_ = viper.BindPFlag("webex_api_base_url", rootCmd.Flags().Lookup("webex-api-base-url"))
-	_ = viper.BindPFlag("timeout", rootCmd.Flags().Lookup("timeout"))
-	_ = viper.BindPFlag("include_tools", rootCmd.Flags().Lookup("include"))
-	_ = viper.BindPFlag("exclude_tools", rootCmd.Flags().Lookup("exclude"))
-	_ = viper.BindPFlag("minimal", rootCmd.Flags().Lookup("minimal"))
-	_ = viper.BindPFlag("readonly_minimal", rootCmd.Flags().Lookup("readonly-minimal"))
-	_ = viper.BindPFlag("shared_env_minimal", rootCmd.Flags().Lookup("shared-env-minimal"))
-	_ = viper.BindPFlag("enable_mcp_elicitation", rootCmd.Flags().Lookup("enable-mcp-elicitation"))
-	_ = viper.BindPFlag("streaming_ignore_from_emails", rootCmd.Flags().Lookup("streaming-ignore-from-emails"))
-	_ = viper.BindPFlag("host", rootCmd.Flags().Lookup("host"))
-	_ = viper.BindPFlag("port", rootCmd.Flags().Lookup("port"))
-	_ = viper.BindPFlag("client_id", rootCmd.Flags().Lookup("client-id"))
-	_ = viper.BindPFlag("client_secret", rootCmd.Flags().Lookup("client-secret"))
-	_ = viper.BindPFlag("oauth_scopes", rootCmd.Flags().Lookup("oauth-scopes"))
-	_ = viper.BindPFlag("redirect_uri", rootCmd.Flags().Lookup("redirect-uri"))
-	_ = viper.BindPFlag("base_url", rootCmd.Flags().Lookup("base-url"))
-	_ = viper.BindPFlag("auth_api_key", rootCmd.Flags().Lookup("auth-api-key"))
-	_ = viper.BindPFlag("tls_cert", rootCmd.Flags().Lookup("tls-cert"))
-	_ = viper.BindPFlag("tls_key", rootCmd.Flags().Lookup("tls-key"))
-	_ = viper.BindPFlag("store", rootCmd.Flags().Lookup("store"))
-	_ = viper.BindPFlag("store_dsn", rootCmd.Flags().Lookup("store-dsn"))
-	_ = viper.BindPFlag("cors_origins", rootCmd.Flags().Lookup("cors-origins"))
+	_ = viper.BindPFlag("mode", rootCmd.PersistentFlags().Lookup("mode"))
+	_ = viper.BindPFlag("access_token", rootCmd.PersistentFlags().Lookup("access-token"))
+	_ = viper.BindPFlag("webex_api_base_url", rootCmd.PersistentFlags().Lookup("webex-api-base-url"))
+	_ = viper.BindPFlag("timeout", rootCmd.PersistentFlags().Lookup("timeout"))
+	_ = viper.BindPFlag("include_tools", rootCmd.PersistentFlags().Lookup("include"))
+	_ = viper.BindPFlag("exclude_tools", rootCmd.PersistentFlags().Lookup("exclude"))
+	_ = viper.BindPFlag("minimal", rootCmd.PersistentFlags().Lookup("minimal"))
+	_ = viper.BindPFlag("readonly_minimal", rootCmd.PersistentFlags().Lookup("readonly-minimal"))
+	_ = viper.BindPFlag("shared_env_minimal", rootCmd.PersistentFlags().Lookup("shared-env-minimal"))
+	_ = viper.BindPFlag("enable_mcp_elicitation", rootCmd.PersistentFlags().Lookup("enable-mcp-elicitation"))
+	_ = viper.BindPFlag("streaming_ignore_from_emails", rootCmd.PersistentFlags().Lookup("streaming-ignore-from-emails"))
+	_ = viper.BindPFlag("host", rootCmd.PersistentFlags().Lookup("host"))
+	_ = viper.BindPFlag("port", rootCmd.PersistentFlags().Lookup("port"))
+	_ = viper.BindPFlag("client_id", rootCmd.PersistentFlags().Lookup("client-id"))
+	_ = viper.BindPFlag("client_secret", rootCmd.PersistentFlags().Lookup("client-secret"))
+	_ = viper.BindPFlag("oauth_scopes", rootCmd.PersistentFlags().Lookup("oauth-scopes"))
+	_ = viper.BindPFlag("redirect_uri", rootCmd.PersistentFlags().Lookup("redirect-uri"))
+	_ = viper.BindPFlag("base_url", rootCmd.PersistentFlags().Lookup("base-url"))
+	_ = viper.BindPFlag("auth_api_key", rootCmd.PersistentFlags().Lookup("auth-api-key"))
+	_ = viper.BindPFlag("tls_cert", rootCmd.PersistentFlags().Lookup("tls-cert"))
+	_ = viper.BindPFlag("tls_key", rootCmd.PersistentFlags().Lookup("tls-key"))
+	_ = viper.BindPFlag("store", rootCmd.PersistentFlags().Lookup("store"))
+	_ = viper.BindPFlag("store_dsn", rootCmd.PersistentFlags().Lookup("store-dsn"))
+	_ = viper.BindPFlag("cors_origins", rootCmd.PersistentFlags().Lookup("cors-origins"))
+	_ = viper.BindPFlag("token_file", rootCmd.PersistentFlags().Lookup("token-file"))
+	_ = viper.BindPFlag("oauth_no_browser", rootCmd.PersistentFlags().Lookup("oauth-no-browser"))
+	_ = viper.BindPFlag("oauth_login_wait", rootCmd.PersistentFlags().Lookup("oauth-login-wait"))
 
 	// Bind environment variables
 	viper.SetEnvPrefix("WEBEX")
@@ -109,6 +118,13 @@ func main() {
 	_ = viper.BindEnv("store", "WEBEX_STORE")
 	_ = viper.BindEnv("store_dsn", "WEBEX_STORE_DSN")
 	_ = viper.BindEnv("cors_origins", "WEBEX_CORS_ORIGINS")
+	_ = viper.BindEnv("token_file", "WEBEX_TOKEN_FILE")
+	_ = viper.BindEnv("oauth_no_browser", "WEBEX_OAUTH_NO_BROWSER")
+	_ = viper.BindEnv("oauth_login_wait", "WEBEX_OAUTH_LOGIN_WAIT")
+
+	rootCmd.AddCommand(newAuthCommand())
+	rootCmd.AddCommand(newLoginCommand("login"))
+	rootCmd.AddCommand(newLogoutCommand("logout"))
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -149,19 +165,56 @@ func run(cmd *cobra.Command, args []string) error {
 
 func runSTDIO(sdkConfig *webexsdk.Config, include, exclude string, minimal, readonlyMinimal, sharedEnvMinimal, enableMCPElicitation bool, streamingIgnoreFromEmails []string) error {
 	accessToken := viper.GetString("access_token")
-	if accessToken == "" {
-		return fmt.Errorf("WEBEX_ACCESS_TOKEN environment variable or --access-token flag is required in stdio mode")
+	clientID := viper.GetString("client_id")
+	clientSecret := viper.GetString("client_secret")
+
+	// Static access token only (original behavior).
+	if clientID == "" && clientSecret == "" {
+		if accessToken == "" {
+			return fmt.Errorf("stdio mode needs either WEBEX_ACCESS_TOKEN (--access-token), or a Webex Integration via WEBEX_CLIENT_ID + WEBEX_CLIENT_SECRET (--client-id/--client-secret) for browser sign-in")
+		}
+
+		webexClient, err := webex.NewClient(accessToken, sdkConfig)
+		if err != nil {
+			return fmt.Errorf("failed to create Webex client: %w", err)
+		}
+
+		resolver := auth.NewStaticClientResolver(webexClient)
+
+		log.Printf("Starting Webex MCP Server v%s in STDIO mode (base_url=%s, timeout=%s)", version, sdkConfig.BaseURL, sdkConfig.Timeout)
+		return startSTDIOServer(resolver, include, exclude, minimal, readonlyMinimal, sharedEnvMinimal, enableMCPElicitation, streamingIgnoreFromEmails, nil)
 	}
 
-	webexClient, err := webex.NewClient(accessToken, sdkConfig)
+	// Webex Integration (OAuth) via local browser sign-in.
+	mgr, err := newLocalOAuthManager(sdkConfig)
 	if err != nil {
-		return fmt.Errorf("failed to create Webex client: %w", err)
+		return err
+	}
+	resolver := mgr.Resolver()
+
+	var messageOptions []tools.MessageToolOptions
+	if accessToken != "" {
+		botClient, err := webex.NewClient(accessToken, sdkConfig)
+		if err != nil {
+			return fmt.Errorf("failed to create bot Webex client from WEBEX_ACCESS_TOKEN for hybrid STDIO mode: %w", err)
+		}
+		messageOptions = append(messageOptions, tools.MessageToolOptions{
+			AllowLocalFilePath: true,
+			SendResolver:       auth.NewStaticClientResolver(botClient),
+			LoggedInUserSender: resolver,
+		})
+		log.Printf("Starting Webex MCP Server v%s in STDIO HYBRID mode (base_url=%s): OAuth user sign-in enabled; default message sends use WEBEX_ACCESS_TOKEN bot identity", version, sdkConfig.BaseURL)
+	} else {
+		log.Printf("Starting Webex MCP Server v%s in STDIO OAuth mode (base_url=%s, redirect_uri=%s)", version, sdkConfig.BaseURL, mgr.RedirectURI())
 	}
 
-	resolver := auth.NewStaticClientResolver(webexClient)
+	if mgr.HasUsableToken() {
+		log.Printf("Using stored Webex OAuth token from %s", mgr.TokenFile())
+	} else {
+		log.Printf("No stored Webex OAuth token at %s. Sign-in will open in your browser on the first Webex tool call (or run `webex-go-mcp login` beforehand).", mgr.TokenFile())
+	}
 
-	log.Printf("Starting Webex MCP Server v%s in STDIO mode (base_url=%s, timeout=%s)", version, sdkConfig.BaseURL, sdkConfig.Timeout)
-	return startSTDIOServer(resolver, include, exclude, minimal, readonlyMinimal, sharedEnvMinimal, enableMCPElicitation, streamingIgnoreFromEmails)
+	return startSTDIOServer(resolver, include, exclude, minimal, readonlyMinimal, sharedEnvMinimal, enableMCPElicitation, streamingIgnoreFromEmails, mgr, messageOptions...)
 }
 
 func normalizeHTTPBaseURL(raw string) (string, error) {

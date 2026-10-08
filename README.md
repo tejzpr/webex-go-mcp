@@ -4,7 +4,8 @@ A Go-based [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) serv
 
 ## Features
 
-- **Two transport modes**: STDIO (single-user, access token) and HTTP (OAuth, static token, or hybrid bot/user mode)
+- **Two transport modes**: STDIO (single-user: access token, Webex Integration browser sign-in, or hybrid) and HTTP (OAuth, static token, or hybrid bot/user mode)
+- **Browser sign-in for STDIO**: With a Webex Integration configured, STDIO mode signs you in through your browser (loopback redirect + PKCE), stores the token locally, and refreshes it automatically
 - **OAuth 2.1 Authorization Server**: In HTTP mode, acts as an MCP-compliant OAuth 2.1 authorization server, proxying Webex Integration OAuth (Authorization Code + PKCE)
 - **Dynamic Client Registration**: RFC 7591 support for MCP clients to register dynamically
 - **Opaque Bearer tokens**: Issues its own tokens to MCP clients; Webex tokens never exposed
@@ -29,7 +30,7 @@ A Go-based [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) serv
 ## Prerequisites
 
 - Go 1.26 or later
-- **STDIO mode**: A [Webex access token](https://developer.webex.com/docs/getting-your-personal-access-token)
+- **STDIO mode**: A [Webex access token](https://developer.webex.com/docs/getting-your-personal-access-token), or a [Webex Integration](https://developer.webex.com/docs/integrations) with `http://localhost:8765/callback` as a redirect URI for browser sign-in (or both, for hybrid mode)
 - **HTTP mode**: A [Webex Integration](https://developer.webex.com/docs/integrations) for OAuth, a Webex access token for static bot mode, or both for hybrid mode
 
 ## Build
@@ -61,7 +62,14 @@ Configuration is loaded via environment variables and/or CLI flags. CLI flags ta
 
 | Env Variable | CLI Flag | Required | Default | Description |
 |---|---|---|---|---|
-| `WEBEX_ACCESS_TOKEN` | `--access-token` | Yes (stdio) | - | Webex API bearer token |
+| `WEBEX_ACCESS_TOKEN` | `--access-token` | Either (stdio) | - | Webex API bearer token. With a Webex Integration also configured, it powers default message sends as the bot (STDIO hybrid mode) |
+| `WEBEX_CLIENT_ID` | `--client-id` | Either (stdio) | - | Webex Integration Client ID. Enables browser sign-in in STDIO mode |
+| `WEBEX_CLIENT_SECRET` | `--client-secret` | With client ID | - | Webex Integration Client Secret |
+| `WEBEX_REDIRECT_URI` | `--redirect-uri` | No | `http://localhost:8765/callback` | Loopback redirect URI registered on the Integration. Must be `http://localhost`, `127.0.0.1` or `[::1]` with an explicit port |
+| `WEBEX_OAUTH_SCOPES` | `--oauth-scopes` | No | `spark:all` | Webex OAuth scopes (space-separated) |
+| `WEBEX_TOKEN_FILE` | `--token-file` | No | `<user config dir>/webex-go-mcp/oauth-token.json` | Where the STDIO OAuth token is stored (file mode `0600`). macOS: `~/Library/Application Support`, Linux: `~/.config`, Windows: `%AppData%` |
+| `WEBEX_OAUTH_NO_BROWSER` | `--oauth-no-browser` | No | `false` | Don't open a browser automatically; only log/return the sign-in URL |
+| `WEBEX_OAUTH_LOGIN_WAIT` | `--oauth-login-wait` | No | `60s` | How long a tool call waits for an interactive sign-in before returning the sign-in URL. Negative disables waiting |
 
 ### HTTP Mode Options
 
@@ -147,10 +155,61 @@ These flags **merge** with `--include` -- they don't override it. For example, `
 
 ### STDIO Mode (default)
 
+Access token mode:
+
 ```bash
 export WEBEX_ACCESS_TOKEN="your-token-here"
 ./webex-go-mcp
 ```
+
+Webex Integration (browser sign-in) mode:
+
+```bash
+export WEBEX_CLIENT_ID="your-client-id"
+export WEBEX_CLIENT_SECRET="your-client-secret"
+# optional, defaults to http://localhost:8765/callback
+export WEBEX_REDIRECT_URI="http://localhost:8765/callback"
+
+# Optional: sign in ahead of time (opens your browser, stores the token)
+./webex-go-mcp login
+
+./webex-go-mcp
+```
+
+STDIO hybrid mode (user sign-in + bot sends), same semantics as HTTP hybrid mode:
+
+```bash
+export WEBEX_CLIENT_ID="your-client-id"
+export WEBEX_CLIENT_SECRET="your-client-secret"
+export WEBEX_ACCESS_TOKEN="your-bot-token-here"
+./webex-go-mcp
+```
+
+#### How STDIO browser sign-in works
+
+STDIO servers own stdin/stdout, so they can't prompt you directly. Instead the server uses the native-app OAuth pattern ([RFC 8252](https://datatracker.ietf.org/doc/html/rfc8252)) used by tools like `gh auth login`:
+
+1. When a Webex tool needs a token and none is stored, the server starts a short-lived listener on the loopback redirect URI (only for the duration of the sign-in, max 10 minutes) and opens your browser to the Webex consent page (Authorization Code + PKCE).
+2. After you approve, Webex redirects to `http://localhost:8765/callback`; the server exchanges the code, shows a "Signed in to Webex" page, and stores the token in `WEBEX_TOKEN_FILE` (`0600`).
+3. The tool call that triggered sign-in waits up to `WEBEX_OAUTH_LOGIN_WAIT` (default 60s) and then continues. If you take longer, it returns a `Webex sign-in required` error with a short sign-in URL (`http://localhost:8765/login`); finish signing in and retry.
+4. Tokens are refreshed automatically before they expire and reused across restarts. If several MCP clients run the server with the same token file, a sign-in in one is picked up by the others.
+
+CLI helpers (they read the same env vars / flags):
+
+```bash
+./webex-go-mcp login         # sign in via browser and store the token
+./webex-go-mcp auth status   # show token status and signed-in user (JSON)
+./webex-go-mcp logout        # delete the stored token
+```
+
+In STDIO Integration mode three extra tools are always registered (they are not affected by tool filtering): `webex_auth_status`, `webex_auth_login` (start or wait for a browser sign-in; `force=true` to switch accounts), and `webex_auth_logout`.
+
+#### Setting Up a Webex Integration (STDIO Mode)
+
+1. Create an Integration at [developer.webex.com](https://developer.webex.com) > **My Webex Apps** > **Create a New App** > **Integration**
+2. Add `http://localhost:8765/callback` as a **Redirect URI** (or whatever you set `WEBEX_REDIRECT_URI` to; it must match exactly)
+3. Select the scopes you need (e.g., `spark:all`) and keep `WEBEX_OAUTH_SCOPES` in sync
+4. Put the **Client ID** and **Client Secret** in your MCP client's `env` block (see the Claude Desktop example below)
 
 ### HTTP Mode
 
@@ -292,6 +351,24 @@ Add to your Claude Desktop MCP configuration (`~/Library/Application Support/Cla
 }
 ```
 
+**Using a Webex Integration (browser sign-in, no personal access token):**
+
+```json
+{
+  "mcpServers": {
+    "webex": {
+      "command": "/path/to/webex-go-mcp",
+      "env": {
+        "WEBEX_CLIENT_ID": "your-integration-client-id",
+        "WEBEX_CLIENT_SECRET": "your-integration-client-secret"
+      }
+    }
+  }
+}
+```
+
+The first Webex tool call opens your browser to sign in; after that the stored token is reused and refreshed automatically.
+
 ### Cursor
 
 Add to your Cursor MCP configuration (`.cursor/mcp.json` in your project or `~/.cursor/mcp.json` globally):
@@ -362,6 +439,12 @@ Add to your Cursor MCP configuration (`.cursor/mcp.json` in your project or `~/.
 > **Note:** The `go run` approach requires Go to be installed and available on your `PATH`. The first run will download and compile the module (cached for subsequent runs). To update to the latest version, Go will re-fetch when `@latest` resolves to a newer release.
 
 ## Tool Reference
+
+### Auth (STDIO + Webex Integration mode only)
+
+- **`webex_auth_status`** -- Show whether a user is signed in, who it is, token expiry, and any pending sign-in URL
+- **`webex_auth_login`** -- Start (or wait for) a browser sign-in; returns a `loginUrl` if the user hasn't finished within `waitSeconds`. `force=true` signs in again even if a token exists
+- **`webex_auth_logout`** -- Delete the stored token and cancel any pending sign-in
 
 ### Messages
 
@@ -454,14 +537,18 @@ Add to your Cursor MCP configuration (`.cursor/mcp.json` in your project or `~/.
 webex-go-mcp/
   main.go       -- Cobra CLI + Viper config, mode branching (STDIO/HTTP)
   server.go     -- MCP server setup, STDIO + HTTP server startup
+  auth_cmd.go   -- `login`, `logout`, `auth status` CLI commands (STDIO OAuth)
   auth/
     client_resolver.go  -- ClientResolver type (static for STDIO, context-based for HTTP)
     discovery.go        -- RFC 9728 + RFC 8414 well-known metadata endpoints
     middleware.go       -- Bearer token auth middleware, transparent token refresh
-    oauth.go            -- /authorize, /callback, /token (proxies Webex OAuth)
+    oauth.go            -- /authorize, /callback, /token (proxies Webex OAuth); shared Webex code exchange/refresh
+    local_oauth.go      -- STDIO browser sign-in: loopback listener, PKCE, auto-refresh, resolver
+    local_token_store.go -- STDIO OAuth token file (0600, atomic writes)
     registration.go     -- RFC 7591 Dynamic Client Registration
     store.go            -- In-memory token store, auth code store, pending auth state
   tools/
+    auth.go           -- 3 STDIO sign-in tools (webex_auth_status/login/logout)
     filter.go         -- ToolRegistrar interface, tool include/exclude filtering
     enrich.go         -- Response enrichment helpers (person names, room info, files)
     calling.go       -- 4 Webex Calling settings tools

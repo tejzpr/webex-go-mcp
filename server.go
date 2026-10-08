@@ -80,9 +80,18 @@ func registerTools(resolver auth.ClientResolver, include, exclude string, minima
 }
 
 // startSTDIOServer starts the MCP server in STDIO mode.
-func startSTDIOServer(resolver auth.ClientResolver, include, exclude string, minimal, readonlyMinimal, sharedEnvMinimal, enableMCPElicitation bool, streamingIgnoreFromEmails []string) error {
+// localOAuth is non-nil when STDIO mode authenticates via a Webex Integration;
+// in that case the webex_auth_* sign-in tools are registered as well.
+func startSTDIOServer(resolver auth.ClientResolver, include, exclude string, minimal, readonlyMinimal, sharedEnvMinimal, enableMCPElicitation bool, streamingIgnoreFromEmails []string, localOAuth *auth.LocalOAuthManager, messageOptions ...tools.MessageToolOptions) error {
 	// Create MCPServer first, then wire up MercuryManager for streaming tools
-	s := registerTools(resolver, include, exclude, minimal, readonlyMinimal, sharedEnvMinimal, enableMCPElicitation, nil)
+	s := registerTools(resolver, include, exclude, minimal, readonlyMinimal, sharedEnvMinimal, enableMCPElicitation, nil, messageOptions...)
+
+	// Sign-in tools bypass tool filtering: they are the only way to recover
+	// from a missing/expired token inside the MCP client.
+	if localOAuth != nil {
+		tools.RegisterLocalAuthTools(s, localOAuth)
+		defer localOAuth.Close()
+	}
 
 	// Create MercuryManager and register streaming tools (works in STDIO too)
 	mercuryMgr := streaming.NewMercuryManagerWithIgnoredSenderEmails(s, streamingIgnoreFromEmails)
