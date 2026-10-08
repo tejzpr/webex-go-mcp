@@ -35,6 +35,8 @@ var elicitationProtectedToolPrefixes = []string{
 	"webex_meetings_patch",
 	"webex_meetings_delete",
 	"webex_transcripts_update_snippet",
+	"webex_calling_set_availability",
+	"webex_calling_set_call_forwarding",
 	"webex_webhooks_create",
 	"webex_webhooks_update",
 	"webex_webhooks_delete",

@@ -22,6 +22,7 @@ A Go-based [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) serv
 | **Meetings** | 8 | List, create, get, update, patch, delete meetings; list participants, get participant |
 | **Transcripts** | 5 | List transcripts, download content, list/get/update snippets |
 | **Recordings** | 3 | List, get, download recordings |
+| **Calling** | 4 | Get/set calling availability (DND), get/set call forwarding |
 | **Streaming** | 8 | Subscribe (room, mentions, direct, from-person), unsubscribe, wait_for_message, wait_for_message_in_room_from_person, list_subscriptions |
 | **Webhooks** | 5 | List, create, get, update, delete webhooks |
 
@@ -114,9 +115,9 @@ When `WEBEX_ENABLE_MCP_ELICITATION=true`, tools that send, create, update, patch
 
 For convenience, preset flags are available that automatically add a curated set of tools to the `--include` list:
 
-- **`--minimal`** -- All operations for messages, rooms, teams, meetings, transcripts, and streaming (excludes memberships and webhooks). Includes the hybrid-only logged-in-user send tools when HTTP hybrid mode is enabled.
+- **`--minimal`** -- All operations for messages, rooms, teams, meetings, transcripts, calling, and streaming (excludes memberships and webhooks). Includes the hybrid-only logged-in-user send tools when HTTP hybrid mode is enabled.
 - **`--shared-env-minimal`** -- Shared bot-safe surface: person lookup and outbound message/card/attachment tools only. No room/message history reads, broad lists, subscriptions, transcripts, meetings, memberships, webhooks, updates, or deletes. Includes the hybrid-only logged-in-user send tools when HTTP hybrid mode is enabled.
-- **`--readonly-minimal`** -- Only read/list/get operations for messages, rooms, teams, meetings, transcripts, and streaming. No create, update, or delete. **17 tools.**
+- **`--readonly-minimal`** -- Only read/list/get operations for messages, rooms, teams, meetings, transcripts, calling, and streaming. No create, update, or delete.
 
 These flags **merge** with `--include` -- they don't override it. For example, `--minimal --include "webhooks:list"` registers the minimal set plus `webhooks:list`. If multiple presets are set, `--shared-env-minimal` takes priority because it is the safest.
 
@@ -129,7 +130,7 @@ These flags **merge** with `--include` -- they don't override it. For example, `
 # Register all tools except destructive ones
 ./webex-go-mcp --exclude "messages:delete,rooms:delete,meetings:delete,memberships:delete,webhooks:delete"
 
-# Use the minimal preset (messages, rooms, teams, meetings, transcripts)
+# Use the minimal preset (messages, rooms, teams, meetings, transcripts, calling)
 ./webex-go-mcp --minimal
 
 # Use readonly-minimal (only read operations, no writes)
@@ -421,6 +422,13 @@ Add to your Cursor MCP configuration (`.cursor/mcp.json` in your project or `~/.
 - **`webex_recordings_get`** -- Get recording details by ID
 - **`webex_recordings_download`** -- Download recording content
 
+### Calling
+
+- **`webex_calling_get_availability`** -- Get Webex Calling availability. This reads Do Not Disturb (DND); `available=true` means DND is disabled.
+- **`webex_calling_set_availability`** -- Set Webex Calling availability. `available=true` disables DND; `available=false` enables DND.
+- **`webex_calling_get_call_forwarding`** -- Get call forwarding settings, including always, busy, no-answer, and business-continuity rules.
+- **`webex_calling_set_call_forwarding`** -- Update call forwarding settings. Only supplied fields are changed; omitted forwarding rules are preserved.
+
 ### Streaming
 
 - **`webex_subscribe_room_messages`** -- Subscribe to real-time messages in a room
@@ -456,6 +464,7 @@ webex-go-mcp/
   tools/
     filter.go         -- ToolRegistrar interface, tool include/exclude filtering
     enrich.go         -- Response enrichment helpers (person names, room info, files)
+    calling.go       -- 4 Webex Calling settings tools
     messages.go       -- 6 message tools
     rooms.go          -- 5 room tools
     recordings.go     -- 3 recording tools

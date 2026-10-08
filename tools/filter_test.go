@@ -175,11 +175,37 @@ func TestResolvePresets_SharedEnvMinimalTrue(t *testing.T) {
 	}
 }
 
+func TestResolvePresets_ReadonlyMinimalTrue(t *testing.T) {
+	got := ResolvePresets(false, true, false, "")
+	expected := strings.Join(PresetReadonlyMinimal, ",")
+	if got != expected {
+		t.Errorf("ResolvePresets(false, true, false, \"\") = %q, want %q", got, expected)
+	}
+}
+
+func TestResolvePresets_ReadonlyMinimalTrueWithExistingInclude(t *testing.T) {
+	include := "webex_custom_tool"
+	got := ResolvePresets(false, true, false, include)
+	expected := strings.Join(PresetReadonlyMinimal, ",") + "," + include
+	if got != expected {
+		t.Errorf("ResolvePresets(false, true, false, %q) = %q, want %q", include, got, expected)
+	}
+}
+
 func TestResolvePresets_SharedEnvMinimalTakesPriority(t *testing.T) {
 	got := ResolvePresets(true, true, true, "")
 	expected := strings.Join(PresetSharedEnvMinimal, ",")
 	if got != expected {
 		t.Errorf("ResolvePresets(true, true, true, \"\") = %q, want %q", got, expected)
+	}
+}
+
+func TestResolvePresets_SharedEnvMinimalTrueWithExistingInclude(t *testing.T) {
+	include := "webex_custom_tool"
+	got := ResolvePresets(false, false, true, include)
+	expected := strings.Join(PresetSharedEnvMinimal, ",") + "," + include
+	if got != expected {
+		t.Errorf("ResolvePresets(false, false, true, %q) = %q, want %q", include, got, expected)
 	}
 }
 
@@ -193,6 +219,36 @@ func TestPresetsIncludeHybridLoggedInUserSendTools(t *testing.T) {
 			if !stringSliceContains(preset, tool) {
 				t.Fatalf("preset %v does not include %s", preset, tool)
 			}
+		}
+	}
+}
+
+func TestPresetsIncludeCallingTools(t *testing.T) {
+	for _, tool := range []string{
+		"webex_calling_get_availability",
+		"webex_calling_set_availability",
+		"webex_calling_get_call_forwarding",
+		"webex_calling_set_call_forwarding",
+	} {
+		if !stringSliceContains(PresetMinimal, tool) {
+			t.Fatalf("minimal preset does not include %s", tool)
+		}
+	}
+
+	for _, tool := range []string{
+		"webex_calling_get_availability",
+		"webex_calling_get_call_forwarding",
+	} {
+		if !stringSliceContains(PresetReadonlyMinimal, tool) {
+			t.Fatalf("readonly-minimal preset does not include %s", tool)
+		}
+	}
+	for _, tool := range []string{
+		"webex_calling_set_availability",
+		"webex_calling_set_call_forwarding",
+	} {
+		if stringSliceContains(PresetReadonlyMinimal, tool) {
+			t.Fatalf("readonly-minimal preset should not include mutating tool %s", tool)
 		}
 	}
 }

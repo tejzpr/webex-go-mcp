@@ -151,7 +151,8 @@ func normalizeToolName(entry string) []string {
 // Preset tool lists for --minimal, --shared-env-minimal, and --readonly-minimal flags.
 // These are full tool names (webex_{category}_{action}).
 var (
-	// PresetMinimal includes all tools for messages, rooms, teams, meetings, and transcripts.
+	// PresetMinimal includes all tools for messages, rooms, teams, meetings,
+	// transcripts, calling, and streaming.
 	// Excludes memberships and webhooks.
 	PresetMinimal = []string{
 		"webex_messages_list", "webex_messages_create", "webex_messages_send_attachment", "webex_messages_send_adaptive_card", "webex_messages_get", "webex_messages_delete",
@@ -163,6 +164,7 @@ var (
 		"webex_teams_list", "webex_teams_create", "webex_teams_get", "webex_teams_update",
 		"webex_meetings_list", "webex_meetings_create", "webex_meetings_get", "webex_meetings_update", "webex_meetings_delete", "webex_meetings_list_participants",
 		"webex_transcripts_list", "webex_transcripts_download", "webex_transcripts_list_snippets", "webex_transcripts_get_snippet", "webex_transcripts_update_snippet",
+		"webex_calling_get_availability", "webex_calling_set_availability", "webex_calling_get_call_forwarding", "webex_calling_set_call_forwarding",
 		"webex_subscribe_room_messages", "webex_subscribe_mentions", "webex_subscribe_direct_messages", "webex_subscribe_messages_from_person", "webex_unsubscribe", "webex_wait_for_message", "webex_wait_for_message_in_room_from_person", "webex_list_subscriptions",
 		"webex_fetch_next_page",
 	}
@@ -178,7 +180,7 @@ var (
 		"webex_uploads_request_url",
 	}
 
-	// PresetReadonlyMinimal includes only read/GET tools for messages, rooms, teams, meetings, and transcripts.
+	// PresetReadonlyMinimal includes only read/GET tools for messages, rooms, teams, meetings, transcripts, and calling.
 	// No create, update, or delete operations.
 	PresetReadonlyMinimal = []string{
 		"webex_messages_list", "webex_messages_get",
@@ -188,6 +190,7 @@ var (
 		"webex_teams_list", "webex_teams_get",
 		"webex_meetings_list", "webex_meetings_get", "webex_meetings_list_participants",
 		"webex_transcripts_list", "webex_transcripts_download", "webex_transcripts_list_snippets", "webex_transcripts_get_snippet",
+		"webex_calling_get_availability", "webex_calling_get_call_forwarding",
 		"webex_subscribe_room_messages", "webex_subscribe_mentions", "webex_subscribe_direct_messages", "webex_subscribe_messages_from_person", "webex_unsubscribe", "webex_wait_for_message", "webex_wait_for_message_in_room_from_person", "webex_list_subscriptions",
 		"webex_fetch_next_page",
 	}

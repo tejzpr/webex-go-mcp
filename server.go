@@ -67,6 +67,7 @@ func registerTools(resolver auth.ClientResolver, include, exclude string, minima
 	tools.RegisterMembershipTools(registrar, resolver)
 	tools.RegisterMeetingTools(registrar, resolver)
 	tools.RegisterTranscriptTools(registrar, resolver)
+	tools.RegisterCallingTools(registrar, resolver)
 	tools.RegisterWebhookTools(registrar, resolver)
 	tools.RegisterPaginationTools(registrar, resolver)
 

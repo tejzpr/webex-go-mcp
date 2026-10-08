@@ -84,11 +84,15 @@ func TestRequiresElicitation(t *testing.T) {
 		{name: "webex_meetings_patch", want: true},
 		{name: "webex_webhooks_delete", want: true},
 		{name: "webex_transcripts_update_snippet", want: true},
+		{name: "webex_calling_set_availability", want: true},
+		{name: "webex_calling_set_call_forwarding", want: true},
 		{name: "webex_messages_list", want: false},
 		{name: "webex_messages_get", want: false},
 		{name: "webex_find_messages_like_in_room", want: false},
 		{name: "webex_transcripts_download", want: false},
 		{name: "webex_uploads_request_url", want: false},
+		{name: "webex_calling_get_availability", want: false},
+		{name: "webex_calling_get_call_forwarding", want: false},
 	}
 
 	for _, tt := range tests {
